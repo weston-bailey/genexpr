@@ -1,0 +1,56 @@
+tanhL(x){
+	
+    x2 = x * x;
+	
+    a  = (((x2 + 378.) * x2 + 17325.) * x2 + 135135.) * x;
+	b  = ((28. * x2 + 3150.) * x2 + 62370.) * x2 + 135135.;
+	tanhL = a / b;
+    
+    return clamp(tanhL, -1., 1.);
+
+}
+
+cubicNL(x) {
+	
+	cnl = dcblock(x * (1 - 0.3333333 * x * x));
+	
+	return cnl;
+
+}
+
+tanhCubicNL(x) {
+	
+    lim = tanh(x);
+	cnl = dcblock(lim * (1 - 0.3333333 * lim * lim));
+	
+	return cnl;
+
+}
+
+resLowpass(signal, freq, res) {
+	
+	History y1(0);
+	History y2(0);
+	
+	//coefficient calc
+	freqCalc = cos(((freq*2)*PI)/samplerate);
+	resLim = clamp(res, 0., .99999);
+	resCalc = .882497*(exp(resLim*.125));
+	b = (resCalc * resCalc);
+	a = -2*(freqCalc * resCalc);
+	inputScaling = (a+b)+1;
+	
+	//Filter
+	aFB = a*y1;
+	bFB = b*y2;
+	fbSum = aFB + bFB;
+	scaled = signal*inputScaling;
+	filteredSignal = scaled - fbSum;
+	y2 = tanhCubicNL(y1);
+   	y1 = tanhCubicNL(filteredSignal);
+	
+	return filteredSignal;
+}
+
+out1 = resLowpass(in1, in2, in3);
+//out1 = resLowpass(in1, in2, in3);s

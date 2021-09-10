@@ -1,0 +1,56 @@
+require ("fsDSPLibrary.genexpr");
+
+History outFlag(0.0);
+
+Param envFlag(1., min=0., max=1);		
+
+//for fx mixer
+Param width(1, min=0.0, max=2.0);
+Param haas(0.0, min=0.0, max=20.0);
+Param bal(0.5, min=0.0, max=1.0);
+Param gain(1);
+Param drywet(0.5, min=0.0, max=1.0);
+//fx params
+Param dTime(11025, min=0);		
+Param fb(0);
+/* 
+mode 0 = stereo
+mode 1 = pingpong LR
+mode 2 = pingpong RL
+mode 3 = reverse
+mode 4 = reverse pp LR
+mode 5 = rev pp RL
+mode 6 = glitch
+mode 7 = glitch pingpong LR
+mode 8 = glitch pingpong RL
+*/
+Param mode(0);
+Param pShift(0, min=0, max=2); //mode
+Param pSA(0.); // amount
+Param filter(0, min=0, max=1); //switch
+Param fc(1500., min=0., max=7000.);
+Param xfade(0., min=0., max=.25);
+Param gMult(.2);
+
+
+dryL = in1;
+dryR = in2;
+
+inFlag = dryL || dryR;
+
+//effect
+yL = 0;
+yR = 0;
+if (inFlag == 1 || outFlag == 1){
+        yL, yR = freqDelay(dryL, dryR, envFlag=envFlag,
+                                dTime=dTime, fb=fb, mode=mode, pS=pShift, pSA=pSA, filter=filter, fc=fc, xfade=xfade, gMult=gMult,
+                                    width=width, haas=haas, bal=bal, gain=gain, drywet=drywet);
+   }
+    else{
+        yL = 0;
+        yR = 0;
+}
+outFlag = aCheckStereoMin(yL, yR, inFlag, .95, .000001, dTime);
+
+out1 = yL;
+out2 = yR;

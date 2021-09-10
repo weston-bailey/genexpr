@@ -1,0 +1,72 @@
+require ("fsDSPLibrary.genexpr");
+
+//for fx mixer
+Param width(1, min=0.0, max=2.0);
+Param haas(0.0, min=0.0, max=20.0);
+Param bal(0.5, min=0.0, max=1.0);
+Param gain(1);
+Param drywet(0.5, min=0.0, max=1.0);
+
+//lfo controls
+Param depth(.5, min=0., max=1.);
+Param offset(.0, min=0, max=1);         //left channel offset
+Param duty(1., min=0.1, max=1.0);
+Param wFSel(0.0, min=0.0, max=3);
+
+//fx specific
+Param ff(0., min=-1, max=1);
+//Param spread(1000);
+
+//smoothing for fx mixer
+sWidth = mixSmooth(width, .95);
+sHaas = mixSmooth(haas, .999);
+sBal = mixSmooth(bal, .95);
+sGain = mixSmooth(gain, .95);
+sDrywet = mixSmooth(drywet, .95);
+
+//smoothing for LFO controls
+sDuty = mixSmooth(duty, .95);
+sOffset = mixSmooth(offset, .999);
+sDepth = mixSmooth(depth, .95);
+
+//more param smothing
+sFf = mixSmooth(ff, .95);
+//sSpread = mixSmooth(spread, .99);
+
+//spread is hardwired 1/32 of sr
+spread = samplerate * .03125;
+
+dryL = in1;
+dryR = in2;
+
+//strero offset lfo
+phase = in3;
+phaseOff = (phase + sOffset) % 1.;
+
+lfoL = fsLFO
+(phaseOff, wFSel, sDuty);
+lfoL = ((lfoL * .5) + .5) * spread;
+lfoL = lfoL + 5;
+lfoL = lfoL * depth;
+
+lfoR = fsLFO2(phase, wFSel, sDuty);
+lfoR = ((lfoR * .5) + .5) * spread;
+lfoR = lfoR + 5;
+lfoR = lfoR * sDepth;
+
+//phaseshifter effect
+psL = apPSBank12Pole(dryL, lfoL, .001);
+psR = apPSBank12Pole(dryR, lfoR, .001);
+
+psL = dcblock(psL);
+psR = dcblock(psR);
+
+psL = psL + (dryL * sFf);
+psR = psR + (dryR * sFf);
+
+psL = psL * .2;
+psR = psR * .2;
+
+out1, out2 = fxMixer(dryL, dryR, psL, psR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+out3 = lfoL;

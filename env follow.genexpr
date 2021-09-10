@@ -1,0 +1,44 @@
+//fast math for exp() makes the coef calc cheaper on cpu
+expA1(x) { 
+    //https://codingforspeed.com/using-faster-exponential-approximation/
+    x = 1.0 + x / 256.0;
+    x *= x; x *= x; x *= x; x *= x;
+    x *= x; x *= x; x *= x; x *= x;
+  
+    return x;
+
+}
+
+onepoleSmooth(x, t){
+	History y0(0);
+	
+	//calc coef
+	a = 1 - expA1(-twopi / (t * samplerate * 0.001)); 
+	
+	//fiter
+	lp = mix(y0, x, a); 
+	y0 = lp;
+	
+	return lp;
+	
+}
+
+History env(0);
+
+Param msA(min = 0);
+Param msB(min = 0);
+
+x = in1;
+flag = abs(x);
+
+y = 0;
+if (flag > env){
+    y = onepoleSmooth(flag, msA);
+}
+else if (flag < env) {
+     y = onepoleSmooth(flag, msB);
+    }
+
+env = y;
+
+out1 = y;

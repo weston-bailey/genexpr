@@ -1,0 +1,44 @@
+require ("fsDSPLibrary.genexpr");
+
+History outFlag(0.0);
+
+Param envFlag(1., min=0., max=1);
+
+//for fx mixer
+Param width(1, min=0.0, max=2.0);
+Param haas(0.0, min=0.0, max=20.0);
+Param bal(0.5, min=0.0, max=1.0);
+Param gain(1);
+Param drywet(0.5, min=0.0, max=1.0);
+
+//fx params
+Param beatLen(11025, min=0);
+//Param repeat(0, min=0, max=1);
+Param speed(1);
+//Param bypass(1);
+Param direction(1);
+
+dryL, dryR = in1, in2;
+
+repeat = 1 - in3;
+
+
+inFlag = dryL || dryR;
+
+yL = 0;
+yR = 0;
+flag = 0;
+if (inFlag == 1 || outFlag == 1){
+        yL, yR, flag = beatRepeat(dryL, dryR, repeat,
+                                    beatLen=beatLen, speed=speed, direction=direction, envFlag=envFlag, 
+                                        width=width, haas=haas, bal=bal, gain=gain, drywet=drywet);
+    }
+    else{
+        yL = 0;
+        yR = 0;
+        flag = 0;
+}
+
+outFlag = flag;
+
+out1, out2 = yL, yR;

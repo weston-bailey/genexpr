@@ -1,0 +1,32 @@
+/*  //  //  //  //  //  //  //
+Uninterpolated Look Up Table
+*/  //  //  //  //  //  //  //
+tabler(){
+    Param freq(2);
+    //Fill the buffer once (Thanks Ernest!!)
+    Data sinTable(16384);
+
+    History flag(0); //triggers calc
+        
+        if (flag == 0){
+            flag = 1;
+            for (x = 0; x < 163784; x += 1) {
+            phase = (x/16384);
+            cs = sin((pi * (phase * 2 - 1)));
+            sinTable.poke(cs, x);
+            }
+        }
+    //freq = in1;
+
+    p = phasor(freq);
+    table = sample(sinTable, p, 0, 
+                            index="phase", interp="linear");
+
+        return table;
+
+}
+Param freq(2);
+
+out1 = tabler(freq=freq);
+out2 = tabler();
+out3 = freq;

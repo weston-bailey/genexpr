@@ -1,0 +1,254 @@
+require ("fsDSPLibrary.genexpr");
+
+allpassCircle(x, dTime, gain, fbComp, fbAdd){
+    
+    Delay ff(samplerate * .25);
+    Delay fb(samplerate * .25);
+    
+    ffTap = ff.read(dTime);
+    fbTap = fb.read(dTime);
+
+    ap = ffTap + (gain * (x - (fbTap * fbComp)));
+
+    fb.write(ap+fbAdd);
+    ff.write(x);
+
+    return (ap);
+
+}
+//3 circle ap
+apCircle3x  (x1, d1, g1, //input, delaytime gain
+                x2, d2, g2,
+                    x3, d3, g3){
+
+    History z1(0);
+
+    ap1 = allpassCircle(x1, d1, g1, .33, z1);
+    ap2 = allpassCircle(x2, d2, g2, .33, ap1);
+    ap3 = allpassCircle(x3, d3, g3, .33, ap2);
+
+    z1 = ap3;
+
+    return ap1, ap2, ap3;
+
+}
+//4 circle ap
+apCircle4x  (x1, d1, g1, //input, delaytime gain
+                x2, d2, g2,
+                    x3, d3, g3,
+                        x4, d4, g4){
+
+    History z1(0);
+
+    ap1 = allpassCircle(x1, d1, g1, .25, z1);
+    ap2 = allpassCircle(x2, d2, g2, .25, ap1);
+    ap3 = allpassCircle(x3, d3, g3, .25, ap2);
+    ap4 = allpassCircle(x4, d4, g4, .25, ap3);
+
+    z1 = ap4;
+
+    return ap1, ap2, ap3, ap4;
+
+}
+/*
+apCircle4x(ap1, ap2, ap3, ap4, dTime, gain){
+
+    History z1(0);
+
+    ap1 = allpassCircle(ap1, dTime, gain, .25, z1);
+    ap2 = allpassCircle(ap2, dTime, gain, .25, ap1);
+    ap3 = allpassCircle(ap3, dTime, gain, .25, ap2);
+    ap4 = allpassCircle(ap4, dTime, gain, .25, ap3);
+
+    z1 = ap4;
+
+    return ap1, ap2, ap3, ap4;
+
+}
+*/
+//ap fdn 4x4
+apFDN16x(x1, d1, g1, //input delaytime gain
+            x2, d2, g2,
+                x3, d3, g3,
+                    x4, d4, g4,
+                        d5, g5,
+                            d6, g6,
+                                d7, g7,
+                                    d8, g8,
+                                        d9, g9,
+                                            d10, g10,
+                                                d11, g11,
+                                                    d12, g12,
+                                                        d13, g13,
+                                                            d14, g14,
+                                                                d15, g15,
+                                                                    d16, g16){
+
+    ap1, ap2, ap3, ap4 = apCircle4x(x1, d1, g1, 
+                                        x2, d2, g2,
+                                            x3, d3, g3,
+                                                x4, d4, g4);
+    ap5, ap6, ap7, ap8 = apCircle4x(ap1, d5, g5,
+                                        ap2, d6, g6,
+                                            ap3, d7, g7,
+                                                ap4, d8, g8);
+    ap9, ap10, ap11, ap12 = apCircle4x(ap5, d9, g9,
+                                        ap6, d10, g10,
+                                            ap7, d11, g11,
+                                                ap8, d12, g12);
+    ap13, ap14, ap15, ap16 = apCircle4x(ap9, d13, g13,
+                                            ap10, d14, g14,
+                                                ap11, d15, g15,
+                                                    ap12, d16, g16);
+
+    return ap1, ap2, ap3, ap4, ap5, ap6, ap7, ap8, ap9, ap10, ap11, ap12, ap13, ap14, ap15, ap16;
+
+}
+comb(x, dTime, fb, ff, g){
+	
+	Delay feedforward(1000); 
+    Delay feedback(1000);
+	ffRead = feedforward.read(dTime);
+	fbRead = feedback.read(dTime);
+	
+	x = x * g;
+	ff = ff * ffRead;
+	fb = fb * fbRead;
+	
+	y = ((x + ff) - fb);
+	
+	feedforward.write(x);
+	feedback.write(y);
+	
+	return y;
+    
+}
+
+//comb for circular arrangement
+combCircle(x, dTime, fb, ff, g, fbComp, fbAdd){
+	
+	Delay feedforward(samplerate * .25); 
+    Delay feedback(samplerate * .25);
+	ffRead = feedforward.read(dTime);
+	fbRead = feedback.read(dTime);
+	
+	x = x * g;
+    ff = (ff * fbComp) * ffRead;
+	fb = (fb * fbComp) * fbRead;
+	
+	y = ((x + ff) - fb);
+	
+	feedforward.write(x);
+	feedback.write(y + fbAdd);
+	
+	return y;
+    
+}
+//3x circle comb
+combCircle3x(x1, d1, fb1, ff1, g1, //input, delaytime feedback feedforward gain
+                x2, d2, fb2, ff2, g2,
+                    x3, d3, fb3, ff3, g3){
+
+    History z1(0);
+
+    c1 = combCircle(x1, d1, fb1, ff1, g1, .25, z1);
+    c2 = combCircle(x2, d2, fb2, ff2, g2, .25, c1);
+    c3 = combCircle(x3, d3, fb3, ff3, g3, .25, c2);
+
+    z1 = c3;
+
+    return c1, c2, c3;
+
+}
+
+combFDN3x3(x1, d1, fb1, ff1, g1, //input, delaytime feedback feedforward gain
+                x2, d2, fb2, ff2, g2,
+                    x3, d3, fb3, ff3, g3
+                        d4, fb4, ff4, g4, // 3 >> 4
+                            d5, fb5, ff5, g5,
+                                d6, fb6, ff6, g6,
+                                    d7, fb7, ff7, g7, //9 >> 12
+                                        d8, fb8, ff8, g8,
+                                            d9, fb9, ff9, g9) {
+    
+    c1, c2, c3 = combCircle3x(x1, d1, fb1, ff1, g1, //input, delaytime feedback feedforward gain
+                                        x2, d2, fb2, ff2, g2,
+                                            x3, d3, fb3, ff3, g3);
+    c4, c5, c6 = combCircle3x(c1, d4, fb4, ff4, g4, // 3 >> 4
+                                c2, d5, fb5, ff5, g5,
+                                    c3, d6, fb6, ff6, g6);
+    c7, c8, c9 = combCircle3x(c4, d7, fb7, ff7, g7, //9 >> 12
+                                c5, d8, fb8, ff8, g8,
+                                    c6, d9, fb9, ff9, g9);
+
+    return c1, c2, c3, c4, c5, c6, c7, c8, c9;
+
+}
+//for fx mixer
+Param width(1, min=0.0, max=2.0);
+Param haas(0.0, min=0.0, max=20.0);
+Param bal(0.5, min=0.0, max=1.0);
+Param gain(1);
+Param drywet(0.5, min=0.0, max=1.0);
+
+//fx sepcific
+Param fb(0.001, min=-1., max=1.0);
+Param dTime(1, min=0.0, max=samplerate * .5);
+Param apGain(0., min=-1., max=1.);
+Param temp(0.0, min=0.0, max=0.75);
+
+//feedback delay line
+Delay fbD(samplerate);
+fbTap = fbD.read(dTime, interp="linear");
+
+//smoothing for fx mixer
+sWidth = mixSmooth(width, .95);
+sHaas = mixSmooth(haas, .999);
+sBal = mixSmooth(bal, .95);
+sGain = mixSmooth(gain, .95);
+sDrywet = mixSmooth(drywet, .95);
+
+xfade1, xfade2, xfade3, xfade4 = quadXfade(temp);
+
+dryL = in1;
+dryR = in2;
+revIn = (dryL * .5) + (dryR * .5) + fbTap;
+
+//mod lfos
+lfo1 = jitterModLFO(.000000006, -50, 50);
+lfo1 = lfo1 + 1000; 
+lfo2 = jitterModLFO(.000000006, -.5, .5);
+lfo2 = apGain;
+
+pos = lfo2;
+neg = lfo2 * -1;
+
+ap1, ap2, ap3, ap4, 
+    ap5, ap6, ap7, ap8, 
+        ap9, ap10, ap11, ap12, 
+            ap13, ap14, ap15, ap16 = apFDN16x(revIn, lfo1, pos, //1 -4
+                                                revIn, lfo1, 0, 
+                                                    revIn, lfo1, 0,
+                                                        revIn, lfo1, 0,
+                                                            lfo1, neg, //5 -8 
+                                                                lfo1, pos,
+                                                                    lfo1, 0,
+                                                                        lfo1, 0,
+                                                                            lfo1, pos, //9 -12
+                                                                                lfo1, neg, 
+                                                                                    lfo1, pos,
+                                                                                        lfo1, 0,
+                                                                                            lfo1, neg, // 13 - 16
+                                                                                                lfo1, pos,
+                                                                                                    lfo1, neg,
+                                                                                                        lfo1, pos);
+
+
+//ap1, ap2, ap3, ap4 = apCircle4x(revIn, revIn, revIn, revIn, lfo1, lfo2);
+fdn = (ap5 + ap6 + ap7 + ap8) * .25;
+fbD.write(dcblock(fdn * fb));
+
+out1, out2 = fxMixer(dryL, dryR, fdn, fdn, sWidth, sHaas, sBal, sGain, sDrywet);
+
+out3 = lfo1;
+out4 = lfo2;

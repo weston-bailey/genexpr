@@ -1,0 +1,142 @@
+//quick and sloppy approximation of exp()
+expA1(x) {
+    //https://codingforspeed.com/using-faster-exponential-approximation/
+    x = 1.0 + x / 256.0;
+    x *= x; x *= x; x *= x; x *= x;
+    x *= x; x *= x; x *= x; x *= x;
+  
+    return x;
+
+}
+
+tanhBranch(x, s){
+	//variable s defines curve 
+    if (x > 0){
+        x = 1 - expA1((s * -1) * x);
+    }
+    else if (x < 0){
+        x = expA1(s * x) - 1;
+    }
+    else {
+        x = 0;
+    }
+    
+	return x;
+}
+
+tanhRational(x){
+    
+    if( x < -3 ){
+        return -1;
+    }
+    else if( x > 3 ){
+        return 1;
+    }
+    else {
+        return x * ( 27 + x * x ) / ( 27 + 9 * x * x );
+    }
+
+}
+
+rectDist(x, d){
+
+    x = x * d;
+    x2 = x * x;
+    x = x / (x2 + .25);
+
+    return x;
+
+}
+softDist(x, d){
+
+    x  = x * (d * 2.5);
+    //x2 = x * x;
+    x = x / (abs(x) + 1);
+
+    return x;
+
+}
+//cubic NL
+cNL(x) {
+
+    //x = x * 10;
+    cnl = dcblock(x * (1 - 0.3333333 * x * x));
+    
+    return cnl;
+
+}
+tanhCNL(x) {
+
+    x = tanhRational(x);
+    x = dcblock(x * (1 - 0.3333333 * x * x));
+    
+    return x;
+
+}
+
+//coef
+svfZdfCoeff(fc, Q){
+
+    History f(0);
+    History r(0);
+    History g(0);
+
+    //coef
+    cf, cr, cg = 0; 
+    if (change(fc) || change(Q)){
+            cf = tan(PI*fc / samplerate);
+            //cr = f + 1 / Q;
+            cr = Q + cf;
+            cg = 1 / (f * r + 1);
+            f = cf;
+            r = cr;
+            g = cg;
+        }
+        else{
+            f = f;
+            r = r;
+            g = g;
+    }
+
+    return f, r, g;
+
+}
+//linear
+svfZdfL(x, f, r, g){
+    //linear Filter
+    /*coeff calc 
+    f = tan(PI*fc / samplerate);
+    r = f + 1 / Q;
+    g = 1 / (f * r + 1);
+    */
+
+    History z1(.5);
+    History z2(.5);
+
+    //calc outputs
+    hp = (x - (z2 + z1 * r)) * g;
+    x1 = hp * f;
+    bp = tanhRational(x1 + z1);
+    x2 = bp * f;
+    lp = x2 + z2;
+    ap = lp - (bp * (1.0 - (r))) + hp;
+
+    //update
+    z1 += (2 * f * hp);
+    z2 += (2 * f * bp);
+
+    return lp, bp, hp, ap;
+
+}
+//shape doesn't like to go below 0
+Param s(.5, min=0.);
+Param fc(500, min=0);
+Param Q(0);
+
+x = in1;
+
+f, r, g = svfZdfCoeff(fc, Q);
+
+lp, bp, hp, ap = svfZdfL(x, f, r, g);
+
+out1, out2, out3, out4 = lp, bp, hp, ap;

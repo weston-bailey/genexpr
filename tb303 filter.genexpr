@@ -1,0 +1,49 @@
+cNL(x) {
+	
+	cnl = dcblock(x * (1 - 0.3333333 * x * x));
+	
+	return cnl;
+
+}
+
+History z0(0.), z1(0.), z2(0.), z3(0.);
+Param k(0.), A(0.);
+Param d(1);
+
+wc = PI * (clamp(in2, 0, 30000.) * 1./samplerate); // PI is Nyquist frequency 
+wc = 2 * tan(0.5*wc); // dewarping, not required with 2x oversampling
+wc2 = wc*wc;
+wc3 = wc2*wc;
+wc4 = wc3*wc;
+b = 1 / (1+8*wc+20*wc2+16*wc3+2*wc4);
+g = 2*wc4 * b;
+
+// current state
+s = (z0*wc3 + z1*(wc2+2*wc3) + z2*(wc+4*wc2+2*wc3) + z3*(1+6*wc+9*wc2+2*wc3)) * b;
+
+// solve feedback loop (linear)
+y4 = (g*in1 + s) / (1 + g*k);
+
+// input clipping
+y0 = (noise() * .00001)+(in1 - k*y4);
+
+// Compute all integrator outputs (y1, y2, y3, y4).
+// Unlike in the well-known Moog transistor ladder, this gets quite nasty (OL - no shit!) due the
+// inherent coupling between filter stages.
+y1 = (y0*(2*wc+12*wc2+20*wc3+8*wc4) + z0*(1+6*wc+10*wc2+4*wc3) + z1*(2*wc+8*wc2+6*wc3) + z2*(2*wc2+4*wc3) + z3*2*wc3)*b;
+
+y2 = (y0*(2*wc2+8*wc3+6*wc4) + z0*(wc+4*wc2+3*wc3) + z1*(1+6*wc+11*wc2+6*wc3) + z2*(wc+4*wc2+4*wc3) + z3*(wc2+2*wc3))*b;
+y2 = cNL(tanh(y2));
+
+y3 = (y0*(2*wc3+4*wc4) + z0*(wc2+2*wc3) + z1*(wc+4*wc2+4*wc3) + z2*(1+6*wc+10*wc2+4*wc3) + z3*(wc+4*wc2+2*wc3))*b;
+y3 = tanh(y3);
+
+y4 = g*y0 + s;
+
+// update filter state
+z0 += (4*wc*(y0 - y1 + y2));
+z1 += (2*wc*(y1 - 2*y2 + y3));
+z2 += (2*wc*(y2 - 2*y3 + y4));
+z3 += (2*wc*(y3 - 2*y4));
+
+out1 = tanh(A*y4);

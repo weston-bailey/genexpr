@@ -1,0 +1,236 @@
+require ("fsDSPLibrary.genexpr");
+rms(x){
+	Param fc(100);
+
+	a = sin(fc * 2 * PI/samplerate); //lp coef
+
+	x = abs(x);
+	x = pow(x, 2); //square
+	x = mixSmooth(x, a); //mean
+	y = sqrt(x); //root
+
+	return y;
+}
+//t = ms
+msCoeffEnv(t){
+	//calc coef
+	return pow(0.01, 1.0 / (t * samplerate * 0.001));
+}
+
+envFollow(x){
+	History prev(0);
+	Param att(300.);
+	Param rel(100.);
+	Param thresh(.3);
+
+	x = rms(x, fc=100); //follow power
+	env = 0;
+	ms = 0;
+	if (x > (prev * thresh)){
+		env = 1;
+		ms = att;
+		}
+		else{
+			env = 0;
+			ms = rel;
+	}
+	prev = x; //update state
+	a = msCoeffEnv(ms); //calc coeff
+	return mixSmooth(env, a), env; //filter switch
+}
+
+diodeApprox(x) {
+
+	rect = abs(x) - 0.667;
+	x = sign(x);
+	rect += abs(rect);
+	rect = pow(rect, 2);
+
+	return 0.04324765822726063 * rect * x;
+
+}
+
+
+
+diodeFun(x){
+
+	Param low(0.2);
+	Param high(0.4);
+	Param peak(1.);
+
+	x = abs(x);
+	
+    rect = 0;
+	if (x <= low){
+	    rect = 0;
+        }
+	    else if ((low < x) && (x <= high)){
+	        rect = peak * (( pow(x - low, 2)) / (2 * high - 2 * low));
+        }
+	    else{
+	    rect = peak * x - peak * high + (peak * ((pow(high - low, 2)) / (2 * high - 2 * low)));
+    }
+	return rect;
+}
+
+
+diode(x){
+	//return softLimit(x, .5);
+	
+    x = diodeFun(x);
+    return mixSmooth(x, .9);
+}
+
+softLimit(x) {
+  return x * (27.0 + x * x) / (27.0 + 9.0 * x * x);
+}
+
+//for adding random wandering jitter to control sigs
+jitterModLFO(speed, low, high){
+	//speed slow = .00000000006 fast = .00000006
+	History y1(0);
+	History y2(0);
+	
+	//Filter
+	a = -2 * y1;
+	fbSum = a + y2;  
+	x = (noise() * speed) - fbSum;
+	
+	y2 = y1;
+	y1 = x;
+
+	range = fold(x, low, high);
+	
+	return range;
+
+}
+
+ringModAna(car, mod) {
+  
+	car = car * .5;
+	c = ((car * -1.) + mod);	
+
+	m = mod + car; 
+	//leak = jitterModLFO(.000000000006, -.3, -.6);
+
+	d1 = diode(c * - 1.);
+	d2 = diode(c);
+	d3 = diode(m * -1.);
+	d4 = diode(m);
+
+	rm = (d1 + d2) * -1.;
+	rm += (d3 + d4);
+
+	return rm;
+
+}
+
+
+
+//mod = tanhSaw(in3, in4, in5);
+mod = in3;
+env = (in1 + in2) * .5;
+env = envFollow(env);
+mod = mod * env;
+
+
+dryL = in1;
+dryR = in2;
+
+rmL, rmR = ringModAna(dryL, mod), ringModAna(dryR, mod);
+
+out1, out2 = rmL, rmR;
+out3, out4 = mod, env;
+out5 = diode(in6);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*
+History outFlag(0.0);
+
+Param envFlag(1., min=0., max=1);
+
+//for fx mixer
+Param width(1, min=0.0, max=2.0);
+Param haas(0.0, min=0.0, max=20.0);
+Param bal(0.5, min=0.0, max=1.0);
+Param gain(1);
+Param drywet(0.5, min=0.0, max=1.0);
+
+//for LFO
+Param wFSel(0.0, min=0.0, max=4.0);
+Param duty(1, min=0.0, max=1.0);
+Param offset(0.0, min=0.0, max=1.0);
+Param depth(1, min=-1.0, max=1.0);
+
+//fx specifc
+Param fb(0.0, min=-1.0, max=1.0);
+Param dTime(1., min=0.0, max=samplerate);
+
+dryL = in1;
+dryR = in2;
+p = in3;
+
+inFlag = dryL || dryR;
+
+//is loop
+yL = 0;
+yR = 0;
+if (inFlag == 1 || outFlag == 1){
+        yL, yR = industryStandard(dryL, dryR, p, envFlag=envFlag,
+                                            wFSel=wFSel, duty=duty, offset=offset, depth=depth, fb=fb, dTime=dTime,
+                                                width=width, haas=haas, bal=bal, gain=gain, drywet=drywet);
+    }
+    else{
+        yL = 0;
+        yR = 0;
+    }
+
+outFlag = aCheckStereoMin(yL, yR, inFlag, .95, .000001, dTime);
+
+out1 = yL;
+out2 = yR;
+*/

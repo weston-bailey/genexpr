@@ -1,0 +1,111 @@
+require ("fsDSPLibrary.genexpr");
+//top mixer
+mainMixIn(dryL, dryR, wetL, wetR, trig){
+    Param tailDur(min=20);
+    Param tailTarg(0, min=0, max=1);
+    Param auxMode0(0);
+    
+    trig = trig > 0;
+
+    fadeInv = line(trig, dur=20);
+    fade = 1 - fadeInv;
+    
+    t, d, s = 0;
+    if (trig == 1){
+            t, d, s = 1., 20., 0.;
+        }
+        else {
+            t, d, s = tailTarg, tailDur, 0.5; 
+        }
+    
+    tail, flag = curve(t, d, s);
+
+    dryL = dryL * fade;
+    dryR = dryR * fade;
+    wetL = wetL * tail;
+    wetR = wetR * tail;
+
+    yL = dryL + wetL;
+    yR = dryR + wetR;
+
+    auxOutL = yL * auxMode0;
+    auxOutR = yR * auxMode0;
+
+    return yL, yR, auxOutL, auxOutR, flag;
+
+}
+//bottom mixer
+mainMixOut(dryL, dryR, auxInL, auxInR, trig){
+
+    History xFade0(1.0);
+    History xFade1(0.0);
+
+    Param auxMode1(0);
+    Param xFade(0, min=0., max=.25);
+
+    sXfade = mixSmooth(xFade, .999);
+
+    if (change(sXfade)){
+        xFade0, xFade1 = stereoXfade(sXfade);
+    }
+        else{
+            xFade0, xFade1 = xFade0, xFade1;
+    }
+
+    trig = trig > 0;
+
+    fadeInv = line(trig, dur=20);
+    fade = 1 - fadeInv;
+    
+    fxL, fxR, auxOutL, auxOutR, bypassL, bypassR, dryXL, dryXR = 0;
+    if (auxMode1 == 0){
+            fxL = ((dryL * xFade0) + (auxInL * xFade1)) * fadeInv;
+            fxR = ((dryR * xFade0) + (auxInR * xFade1)) * fadeInv;
+            bypassL = dryL * fade;
+            bypassR = dryR * fade;
+            auxOutL = dryL * fadeInv; 
+            auxOutR = dryR * fadeInv;
+        }
+        else if (auxMode1 == 1){
+            dryXL = ((dryL * xFade0) + (auxInL * xFade1));
+            dryXR = ((dryR * xFade0) + (auxInR * xFade1));
+            bypassL = dryXL * fade;
+            bypassR = dryXR * fade;
+            fxL = dryXL * fadeInv;
+            fxR = dryXR * fadeInv;
+            auxOutL, auxOutR = 0;
+    }
+
+    return bypassL, bypassR, fxL, fxR, auxOutL, auxOutR;
+
+}
+
+Param tailDur(20, min = 20);
+Param tailTarg(0, min=0, max=1);
+Param auxMode0(0);
+Param auxMode1(0);
+Param xFade(0, min=0., max=.25);
+
+chainL = in1;
+chainR = in2;
+auxInL = in3;
+auxInR = in4;
+wetL = in5;
+wetR = in6;
+trig0 = in7;
+trig1 = in8;
+
+yL, yR, auxOutL, auxOutR, flag = mainMixIn(chainL, chainR, wetL, wetR, trig0, tailTarg=tailTarg, tailDur=tailDur, auxMode0=auxMode0);
+
+bL, bR, fL, fR, auxOutL1, auxOutR1 = mainMixOut(yL, yR, auxInL, auxInR, trig1, auxMode1=auxMode1, xFade=xFade);
+
+out1 = bL;
+out2 = bR;
+out3 = fL;
+out4 = fR;
+out5 = auxOutL;
+out6 = auxOutR;
+out7 = auxOutL1;
+out8 = auxOutR1;
+out9 = flag;
+

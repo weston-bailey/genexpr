@@ -1,0 +1,100 @@
+
+//threeway xfade
+cubeXfade(xfade){
+//range 0. - .5
+//xfade stuff
+offset1 = xfade;
+offset2 = xfade + .75;
+
+xfade1 = cycle(offset1, index="phase");
+xfade2 = cycle(offset2, index="phase");
+xfade3 = xfade1 * -1.;
+
+xfade1 = clamp(xfade1, 0., 1.);
+xfade2 = clamp(xfade2, 0., 1.);
+xfade3 = clamp(xfade3, 0., 1.);
+
+return xfade1, xfade2, xfade3;
+
+}
+
+//coeff calc for svfZdf 
+svfZdfCoeff(fc, Q){
+//History ds(0.0);
+History f(0);
+History r(0);
+History g(0);
+//temp 
+cf = 0;
+cr = 0;
+cg = 0;
+//calc coeff 
+if (change(fc) || change(Q)){
+        cf = tan(PI*fc / samplerate);
+        cr = f + 1 / Q;
+        cg = 1 / (f * r + 1);
+        f = cf;
+        r = cr;
+        g = cg;
+    }
+    else{
+        f = f;
+        r = r;
+        g = g;
+}
+return f, r, g;
+}
+
+//linear SVF for feedback loop
+svfZdfL(x, f, r, g){
+//linear Filter
+/*coeff calc 
+f = tan(PI*fc / samplerate);
+r = f + 1 / Q;
+g = 1 / (f * r + 1);
+*/
+
+History z1(0);
+History z2(0);
+
+// calculate outputs
+hp = (x - r * z1 - z2) * g;
+bp = z1 + f * hp;
+lp = z2 + f * bp;
+//ap = lp - (bp * (1.0 - (r))) + hp;
+
+//update state
+z1 += (2 * f * hp);
+z2 += (2 * f * bp);
+
+return lp, bp, hp;
+}
+    //linear SVF stereo xfade
+svfZdfL4Pole(xL, xR, fc, Q, xfade, poles){
+    //calc coeff 
+    f, r, g = svfZdfCoeff(fc, Q);
+
+    //calc xfade
+    xfade1, xfade2, xfade3 = cubeXfade(xfade);
+    
+    //2 pole stereo filter
+    lp2L, bp2L, hp2L = svfZdfL(xL, f, r, g);
+    lp2R, bp2R, hp2R = svfZdfL(xL, f, r, g);
+    //2 pole xfade
+    y2PL = (xfade1 * lp2L) + (xfade2 * bp2L) + (xfade3 * hp2L);
+    y2PR = (xfade1 * lp2R) + (xfade2 * bp2R) + (xfade3 * hp2R);
+    
+    //4pole filter
+    lp4L, bp4L, hp4L = svfZdfL(y2PL, f, r, g);
+    lp4R, bp4R, hp4R = svfZdfL(y2PR, f, r, g);
+    //4 pole xfade
+    y4PL = (xfade1 * lp4L) + (xfade2 * bp4L) + (xfade3 * hp4L);
+    y4PR = (xfade1 * lp4R) + (xfade2 * bp4R) + (xfade3 * hp4R);
+
+    //crossfade between poles
+    yL = mix(y2PL, y4PL, poles);
+    yR = mix(y2PR, y4PR, poles); 
+
+    return yL, yR;
+    
+}

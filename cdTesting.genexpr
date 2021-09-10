@@ -1,0 +1,256 @@
+/*	//	//	//	//	//	//	//	//
+FUNCTIONS
+*/	//	//	//	//	//	//	//	//
+mixSmooth(x, s){
+    //smooth out parameter
+    History fb(0);
+    smooth = mix(x, fb, s);
+
+    fb = smooth;
+
+    return smooth;
+
+}
+
+freqshiftDelay (signal, pitch){
+    Delay freqshift(samplerate);
+
+    //phase accum for delay
+    p = phasor(pitch, 0);
+    pOff = ((p + .5) % 1.);
+
+    fsP1 = mstosamps(p * 100.);
+    fsP2 = mstosamps(pOff *100);
+
+    //delay
+    fsTap1 = freqshift.read(fsP1);
+    fsTap2 = freqshift.read(fsP2);
+
+    //envelope
+    fsEnv1 =   (fsTap1 * (.5 + (-.5 * cycle(p, index="phase"))));
+    fsEnv2 =   (fsTap2 * (.5 + (-.5 * cycle(pOff, index="phase"))));
+
+    fs = fsEnv1 + fsEnv2;
+
+    freqshift.write(signal);
+
+    return fs;
+
+}
+
+tanhL(x){
+	
+    x2 = x * x;
+	
+    a  = (((x2 + 378.) * x2 + 17325.) * x2 + 135135.) * x;
+	b  = ((28. * x2 + 3150.) * x2 + 62370.) * x2 + 135135.;
+	tanhL = a / b;
+    
+    return clamp(tanhL, -1., 1.);
+
+}
+onepole(signal, xfade, fc){
+	
+    History y0(0);
+	
+	//calc coefficient
+	a = clamp((abs(fc)*sin(2*PI/samplerate)), 0, 1);
+	//fiter
+	lp = mix(y0, signal, a);
+	y0 = lp;
+	hp = signal - lp;
+	
+	//xfade stuff
+	xfade = clamp(xfade, 0., .25);
+	offset = xfade + .75;
+	xfade1 = cycle(xfade, index="phase");
+	xfade2 = cycle(offset, index="phase");
+	lpCross = lp * xfade1;
+ 	hpCross = hp * xfade2;
+	crossover = lpCross + hpCross;
+	
+	
+	return crossover;
+}
+
+/*	//	//	//	//	//	//	//	//
+DECLARATIONS
+*/	//	//	//	//	//	//	//	//
+
+//for the phase accum
+History	phaseAccum(0);
+//for the reset branch
+History	clear(1);	
+//For the FB loops
+History leftFb(0);
+History rightFb(0);
+//declare the buffer
+Data circleDelay(samplerate * 5, 2);			
+//delaytime Param in Samples (this should be smoothed)
+Param delayTime(11025, min=0);		
+//for fb loop
+Param fbGain(0);
+/* Choose delay mode
+mode 0 = stereo
+mode 1 = reverse
+mode 2 = pingpong LR
+mode 3 = pingpong RL
+mode 4 = glitch
+mode 5 = pingpong glitch
+*/
+Param mode(0);
+//for pitchShift effect
+Param pitchShift(0, min=0, max=2);
+//ps amount
+Param pSA(0.);
+//filter on/off
+Param filter(0, min=0, max=1);
+//filter cutoff
+Param fc(1500., min=0., max=7000.);
+//filter crossfade
+Param xfade(0., min=0., max=.25);
+
+/*	//	//	//	//	//	//	//	//
+'DEMI-DECLARATIONS' -- DON'T HAVE TO BE HERE BUT IT HELPS
+*/	//	//	//	//	//	//	//	//
+
+//figure out the delay buffer size
+buffSize = dim(circleDelay);
+//phase Accumulator in Samples for writing to buffer
+writePhase	= wrap((phaseAccum + 1), 0, buffSize);
+phaseAccum = writePhase;
+
+//Alternative phase accum with counter with signed phasor
+/*
+writePhase, carryFlag, carryCount = counter(1, 0, buffSize);
+writePhaseSigned = writePhase / buffSize;
+*/
+
+//phase wrapper for reading
+//readPhase = wrap((writePhase - delayTime), 0, buffSize);
+//readPhaseSigned = readPhase / buffSize;
+
+//Alternative reversable read phasor need Param mode; declared
+//smooth out delay time
+smoothDelay = mixSmooth(delayTime, .9999);
+
+readPhase = 0;
+
+if (mode == 0 || mode == 2 || mode == 3){
+        readPhase = wrap((writePhase - smoothDelay), 0, buffSize);
+    }
+    else if (mode == 1){
+        writePhaseB = buffSize - writePhase;
+        readPhase = wrap((writePhaseB - smoothDelay), 0, buffSize);
+    }
+    else if (mode == 4 || mode == 5 || mode == 6){
+        writePhaseB = buffSize - writePhase;
+        readPhase = fold((writePhaseB * 2) - smoothDelay, 0, buffSize);
+    }
+    
+
+
+//inputs
+
+inL = 0;
+inR = 0;
+
+if (mode == 0 || mode == 1 || mode == 4){
+        inL = in1 + leftFb;
+        inR = in2 + rightFb;  
+    }
+    else if (mode == 2 || mode == 5){
+        inL = (in1 * .5) + (in2 * .5) + rightFb;
+        inR = leftFb;
+    }
+    else if (mode == 3 || mode == 6){
+        inL = rightFb;
+        inR = (in1 * .5) + (in2 * .5) + leftFb;
+    }
+
+/*	//	//	//	//	//	//	//	//
+ROUTINE FOR CLEARING BUFFER
+*/	//	//	//	//	//	//	//	//
+
+if (clear) {
+	
+	for(i = 0; i < buffSize; i += 1) {
+		
+		poke(circleDelay, 0, i, 0, 0, index="samples");
+		poke(circleDelay, 0, i, 1, 0, index="samples");
+	
+	}
+
+	clear = 0;	
+
+}
+
+/*	//	//	//	//	//	//	//	//
+BUFFER OPERATIONS
+*/	//	//	//	//	//	//	//	//
+
+// write to buffer
+poke(circleDelay, inL, writePhase,	0, 0, index="samples");
+poke(circleDelay, inR, writePhase,	1, 0, index="samples");
+
+// read from buffer
+outL = sample(circleDelay, readPhase, 0, index="samples", interp="step");
+outR = sample(circleDelay, readPhase, 1, index="samples", interp="step");
+												//^^can remove index to use 0 >> 1 phasor for speed changes with rate
+														//^^ "cubic" interp, but step is good if using FB 
+
+
+/*	//	//	//	//	//	//	//	//
+FB LOOP AND FX
+*/	//	//	//	//	//	//	//	//
+
+//give the output an alias to allow fx insertion fb loop easier
+fbOutL = outL;
+fbOutR = outR;
+
+//apply filter
+if (filter == 0){
+        fbOutL = fbOutL;
+        fbOutR = fbOutR;
+    }
+    else if (filter == 1){
+        fbOutL = onepole(fbOutL, xfade, fc);
+        fbOutR = onepole(fbOutR, xfade, fc);
+    }
+
+//apply pitchShift effect
+if (pitchShift == 0){
+        fbOutL = fbOutL;
+        fbOutR = fbOutR;
+    }
+    else if (pitchShift == 1){
+        fbOutL = freqshiftDelay((fbOutL *  .5), pSA) + outL * .5;
+        fbOutR = freqshiftDelay((fbOutR * .5), pSA) + outR  * .5; 
+    }
+    else if (pitchShift == 2){
+        fbOutL = freqshiftDelay(fbOutL, pSA);
+        fbOutR = freqshiftDelay(fbOutR, pSA); 
+    }
+
+//limit with tanhAprox only if fb exceed %100
+if (fbGain >= 1. || fbGain <= -1.){
+        fbOutL = tanhL(fbOutL);
+        fbOutR = tanhL(fbOutR); 
+    }
+    else {
+        fbOutL = fbOutL;
+        fbOutR = fbOutR;
+    }
+
+//Scale fb && write to loop
+leftFb = fbOutL * fbGain;
+rightFb = fbOutR * fbGain;
+
+/*	//	//	//	//	//	//	//	//
+Output
+*/	//	//	//	//	//	//	//	//
+
+
+out1 = fbOutL;
+out2 = fbOutR;
+

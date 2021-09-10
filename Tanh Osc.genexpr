@@ -1,0 +1,52 @@
+tanhSquare(freq, bright, duty){
+    
+    dutyScale = 1./duty;
+    freqAbs = abs(freq);
+    
+    freqCalc = clamp((samplerate*.25)/(freqAbs*log10(freqAbs))*(pi*.5), 0., 28.);
+    dutyCalc = freqCalc/dutyScale;
+
+    phase = phasor(freq, 0);
+    offset = clamp(phase*dutyScale, 0., 1.);
+    osc = cycle(offset, index="phase");
+    damp = osc*bright;
+
+    tS = dcblock((tanh(damp*dutyCalc)));
+
+    return tS;
+}
+
+tanhSaw(freq, bright, sawness){
+    dutyScale = .5;
+    freqAbs = abs(freq);
+    
+    freqCalc = clamp((samplerate*.25)/(freqAbs*log10(freqAbs))*(pi*.5), 0., 28.);
+    dutyCalc = freqCalc/dutyScale;
+
+    phase = phasor(freq, 0);
+    offset = clamp(phase*dutyScale, 0., 1.);
+    osc = cycle(offset, index="phase");
+    sawOsc = cycle((offset+scale(sawness, 0., 1., -.25, .25)), index="phase");
+    damp = osc*bright;
+
+    tSq = tanh(damp*dutyCalc);
+    tSa = dcblock(tSq*sawOsc);
+
+    return tSa;
+}
+
+if (in4 == 0){
+        out1 = tanhSquare(in1, in2, in3);
+    }
+    else if (in4 == 1) {
+        out1 = tanhSaw(in1, in2, in3);
+    }
+    else {
+        out1 = 0;
+    }
+
+
+
+
+
+

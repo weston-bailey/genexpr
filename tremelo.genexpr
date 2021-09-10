@@ -1,0 +1,48 @@
+require ("fsDSPLibrary.genexpr");
+
+History outFlag(0.0);
+
+Param envFlag(0., min=0., max=1);
+
+//for fx mixer
+Param width(1, min=0.0, max=2.0);
+Param haas(0.0, min=0.0, max=20.0);
+Param bal(0.5, min=0.0, max=1.0);
+Param gain(1);
+Param drywet(0.5, min=0.0, max=1.0);
+
+//for LFO
+Param wFSel(0.0, min=0.0, max=4.0);
+Param duty(1, min=0.0, max=1.0);
+Param offset(0.0, min=0.0, max=1.0);
+Param depth(1, min=-1.0, max=1.0);
+
+dryL = in1;
+dryR = in2;
+p = in3;
+
+inFlag = dryL || dryR;
+
+//main dsp call
+yL = 0;
+yR = 0;
+
+if (inFlag == 1 || outFlag == 1){
+        yL, yR = stereoTrem(dryL, dryR, p,
+                                wFSel=wFSel, duty=duty, offset=offset, depth=depth,
+                                    width=width, haas=haas, bal=bal, gain=gain, drywet=drywet);
+    }
+    else{
+        yL = 0;
+        yR = 0;
+    }
+if (envFlag < 0){
+        outFlag = aCheckStereo(yL, yR, .95, .000001);
+
+    }
+    else {
+        outFlag = 0;
+}
+
+out1 = yL;
+out2 = yR;

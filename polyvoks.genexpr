@@ -1,0 +1,183 @@
+/*  //  //  //  //  //  //  //  //  //  //  //
+CURRENTLY UNUSED FUNCTIONS
+*/  //  //  //  //  //  //  //  //  //  //  //
+/*
+these are all the nonlinearities I tried in the filter fb loop.
+tanhBranch was kindof cool, with the user defined curve, but the filter was finnicky
+about starting to self oscilate changing the saturation slope wasn't as exciting as I hade hoped. 
+both rectDist and softDist broke the filter, no matter what the cofigurtion was.
+tanhCNL (which is a cubic nonlinearity preceeded by a tanh approx) worked okay, but added
+huge amouts of dc-bias(lol, who would have thought).
+I also tried atan() which worked well, but it sounded the same as tanh and my tanh approx are way cheaper
+than my atan approx. 
+*/
+
+//quick and sloppy approximation of exp() used for tanhBranch
+expA1(x) {
+    //https://codingforspeed.com/using-faster-exponential-approximation/
+    x = 1.0 + x / 256.0;
+    x *= x; x *= x; x *= x; x *= x;
+    x *= x; x *= x; x *= x; x *= x;
+  
+    return x;
+
+}
+//sort of too bright tanh thing with user defined slope (this makes a nice distrtion tho)
+tanhBranch(x, s){
+	//variable s defines curve 
+    if (x > 0){
+        x = 1 - expA1((s * -1) * x);
+    }
+    else if (x < 0){
+        x = expA1(s * x) - 1;
+    }
+    else {
+        x = 0;
+    }
+    
+	return x;
+}
+//I think this is rectifier distortion?
+rectDist(x, d){
+
+    x = x * d;
+    x2 = x * x;
+    x = x / (x2 + .25);
+
+    return x;
+
+}
+//soft saturation between sigmoid/tanh
+softDist(x, d){
+
+    x  = x * (d * 2.5);
+    //x2 = x * x;
+    x = x / (abs(x) + 1);
+
+    return x;
+
+}
+//good old cubic NL
+cNL(x) {
+
+    //x = x * 10;
+    cnl = dcblock(x * (1 - 0.3333333 * x * x));
+    
+    return cnl;
+
+}
+//tanh limiter/saturator >> cubicNL
+tanhCNL(x) {
+
+    x = tanhRational(x);
+    x = dcblock(x * (1 - 0.3333333 * x * x));
+    
+    return x;
+
+}
+/*  //  //  //  //  //  //  //  //  //  //  //
+USED CODE STARTS HERE
+*/  //  //  //  //  //  //  //  //  //  //  //
+//one of my fav tanh aprrox. dirt cheap. Isnt quite perfect. my style.
+tanhRational(x){
+    //http://www.musicdsp.org/showone.php?id=238
+    if( x < -3 ){
+        return -1;
+    }
+    else if( x > 3 ){
+        return 1;
+    }
+    else {
+        return x * ( 27 + x * x ) / ( 27 + 9 * x * x );
+    }
+
+}
+//calc coef separate (b/c in the future this will make things more effecient)
+svfZdfCoeff(fc, Q){
+
+    History f(0);
+    History r(0);
+    History g(0);
+
+    //trigger calc when params change. coef fc and Q could be declared as param here too 
+    //instead of passing them as inputs
+    cf, cr, cg = 0; 
+    if (change(fc) || change(Q)){
+            cf = tan(PI*fc / samplerate);
+            //cr = f + 1 / Q;               //this is an alternative Q calc that I like
+                                                //for linear svf, but it is no good for self osc
+            cr = Q + cf;
+            cg = 1 / (f * r + 1);
+            f = cf;
+            r = cr;
+            g = cg;
+        }
+        else{
+            f = f;
+            r = r;
+            g = g;
+    }
+
+    return f, r, g;
+
+}
+/*drummroll please....the filter! it is sort of a 'zdf' or 'implicit' config. I think this particular one is a 
+frankenstein between some code I have seen posted on forums and one I was working from the .pdf
+why is doing the math better this way? compare to svf~ and watch the resonance and higher frequencies  
+more info 
+https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=1&cad=rja&uact=8&ved=0ahUKEwjVh-Gi5cbaAhVI0FQKHTB3AJEQFggsMAA&url=https%3A%2F%2Fwww.native-instruments.com%2Ffileadmin%2Fni_media%2Fdownloads%2Fpdf%2FPWApproxNLZDF.pdf&usg=AOvVaw0doVToD7-Sez5Q1D7Wp3rY
+https://www.kvraudio.com/forum/viewtopic.php?t=368466 
+https://urs.silvrback.com/zero-delay-feedback
+https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=1&cad=rja&uact=8&ved=0ahUKEwiGq5C458baAhXrxlQKHQE2CGwQFggpMAA&url=http%3A%2F%2Fwww.willpirkle.com%2FDownloads%2FAN-4VirtualAnalogFilters.2.0.pdf&usg=AOvVaw0EDKG5GgQ5Xjd0iGKCsO25
+*/
+svfSelfOsc(x, f, r, g){
+    /*coeff calc 
+    f = tan(PI*fc / samplerate);
+    r = f + 1 / Q; //or r = Q + cf;
+    g = 1 / (f * r + 1);
+    */
+    //uses 
+    History z1(.5);
+    History z2(.5);
+
+    x = x + (noise() * .000001);                //noise injection at -120db-ish
+
+    //calc outputs
+    hp = (x - (z2 + z1 * r)) * g;
+    x1 = hp * f;
+    bp = tanhRational(x1 + z1);                 //bp is best place to but nonlinearity it seems
+    x2 = bp * f;
+    lp = x2 + z2;
+    ap = lp - (bp * (1.0 - (r))) + hp;
+
+    /*
+    I guess you could say you have your choice of three pairs of 'op-amps' here
+    just comment one set and uncomment the other 
+    ********WARNING********
+    each 'op amp' has a different resonace sensitivity
+    */
+    //update
+    z1 = (x1 + bp);         //this is the most analogue sounding, but it is in dire need of anti-aliasing (will aliase so hard that the filter blows)                                                  
+    z2 = (x2 + lp);         //Q < -1. starts to affect tuning(and sound awesome) and Q < -2. will blow from aliasing at around 4k
+    //alternative 'op-amps'
+    //z1 += (2 * f * hp);   //this set up produces much for symetrical waveforms. And by some miracle that is beyond my comprehension it band-limits them (WHAT?!?!?!?!) very cool. do not understand. very, very cool.
+    //z2 += (2 * f * bp);   //I'm sure this will be very useful for low cost cpu situations. Q struggles when less than -.01 and will blow at lower frequencies 
+
+    //z1, z2 = bp, lp;              //chamberlain style, fc is out of tune with the coef calc used but you can still see
+                                        //a self osc chamberlin style svf b/c the resonace response is the same. this set up is more resilient to blow outs, and has a tendency to recover from them
+                                            //at hi freq is still the same (ie the Q amplitude get lowers as it is swept up) 
+
+    return lp, bp, hp, ap;
+
+}
+//shape doesn't like to go below 0
+Param fc(500, min=0);
+Param Q(0);
+
+x = in1;
+
+f, r, g = svfZdfCoeff(fc, Q);
+
+lp, bp, hp, ap = svfSelfOsc(x, f, r, g); //ap mode is a notch/allpass/resonant based on Q setting
+
+out1, out2, out3, out4 = lp, bp, hp, ap;

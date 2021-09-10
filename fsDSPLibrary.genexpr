@@ -1,0 +1,3371 @@
+/*  //  //  //  //  //  //  //  //  //  //  //
+MAIN FX DSP LOOPS
+*/  //  //  //  //  //  //  //  //  //  //  //
+    beatRepeat(inL, inR, repeat){
+
+        History winFlag(1);
+        //declare the buffer && window buffer
+        Data circleDelay(samplerate * 5, 2);			
+        Data winData(8192);
+
+        Param envFlag(1., min=0., max=1);
+        //fx params
+        Param beatLen(11025, min=0);	
+        //Param repeat(0, min=0, max=1); //for param rate 
+        Param speed(1);
+        //Param bypass(1);      //use if bypass logic is uncommented
+        Param direction(1);
+        
+        //for fx mixer
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(0.5, min=0.0, max=1.0);
+        Param envFlag(0., min=0., max=1);    
+
+        //smoothing for fx mixer
+        sWidth = mixSmooth(width, .999);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .999);
+        sGain = mixSmooth(gain, .999);
+        sDrywet = mixSmooth(drywet, .999);
+
+        //fx param smoothing
+        sSpeed = mixSmooth(speed, .999);
+        
+        //figure out the delay buffer size
+        buffSize = dim(circleDelay);
+
+        //make window
+        if (winFlag){
+            winFlag = 0;
+            for (i = 0; i < 8192; i += 1){
+                winPhase = i / 8192;
+                poke(winData, tukeyWin((i / 8192), 15), i,	0, 0, index="samples");
+            }
+
+        }
+
+        //sample counter
+        recAccum, unused, carryCount = counter(1, (repeat * envFlag), beatLen);
+        countFlag = (carryCount < 1); 
+        //LUT window
+        env = sample(winData, (recAccum / beatLen), 0, index="phase", interp="cubic");
+        //env = tukeyWin((recAccum / beatLen), 10);
+        //read/write phase
+        readPhase = (recAccum / beatLen) * (carryCount >= 1);
+        readPhase = rate(readPhase, sSpeed);
+        //reverse that shit baby
+        if (direction == 1){
+                readPhase = readPhase;
+            }
+            else if (direction == 0){
+                readPhase = 1 - readPhase;
+            }       
+        
+        //window && write to buffer
+        winL = inL * env;
+        winR = inR * env;
+        //stop writing after first pass
+        recAccum = recAccum * countFlag;
+        poke(circleDelay, winL, recAccum,	0, 0, index="samples");
+        poke(circleDelay, winR, recAccum,	1, 0, index="samples");
+
+        // read from buffer
+        outL = sample(circleDelay, readPhase, 0, beatLen, 0, index="wave", interp="cubic");
+        outR = sample(circleDelay, readPhase, 0, beatLen, 1, index="wave", interp="cubic");
+                                                        //^^can remove index to use 0 >> 1 phasor for speed changes with rate
+        //incase beatlen changes
+        outL = outL * env;
+        outR = outR * env;
+        
+        
+        /* maybe use later                                                        //^^ "cubic" interp, but step is good if using FB
+        if(bypass == 1){
+                outL = (outL * (carryCount >= 1)) + (inL * (carryCount < 1));
+                outR = (outR * (carryCount >= 1)) + (inL * (carryCount < 1));
+            }
+            else if (bypass == 0){
+                outL = (outL * (carryCount >= 1));
+                outR = (outR * (carryCount >= 1));
+            }
+        */
+        switchEnv = mixSmooth((carryCount >= 1), .999);
+        outL = (outL * switchEnv) + (inL * (1 - switchEnv)); //(outL * (carryCount >= 1)) + (inL * (carryCount < 1));
+        outR = (outR *  switchEnv) + (inR * (1 - switchEnv)); //(carryCount >= 1)) + (inL * (carryCount < 1));
+
+        outFlag = aCheckStereo(outL, outR, .95, .000001);
+
+        yL, yR = fxMixer(inL, inR, outL, outR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+        return yL, yR, outFlag;
+
+    }
+  
+    cleanSVF(dryL, dryR){
+        //for fx mixer
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(.5, min=0.0, max=1.0);
+
+        //fs specifc
+        Param fc(700, min=33);
+        Param Q(1.138, min=1.138, max=12);
+        Param xfade(0, min=0, max=.5);
+        Param poles(0.0, min=0.0, max=1.0);
+
+        //smoothing for fx mixer
+        sWidth = mixSmooth(width, .95);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .99);
+        sGain = mixSmooth(gain, .99);
+        sDrywet = mixSmooth(drywet, .95);
+
+        //param scaling pre-smooth
+        q = pow(Q, (1 - (poles * .5))); 
+
+        //more smoothing
+        sFc = mixSmooth(fc, .95); //new non-lin topology allows no glide
+        sXfade = mixSmooth(xfade, .999);
+        sQ  = mixSmooth(q, .999);
+        sPoles = mixSmooth(poles, .999);
+
+        yL, yR = svfZdfL4Pole(dryL, dryR, sFc, sQ, sXfade, sPoles);
+        yL, yR = fxMixer(dryL, dryR, yL, yR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+        return yL, yR;
+    }
+
+    dirtySVF(dryL, dryR){
+        
+        //for fx mixer
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(.5, min=0.0, max=1.0);
+
+        //fs specifc
+        Param fc(700, min=33);
+        Param Q(1.138, min=1.138, max=12);
+        Param xfade(0, min=0, max=.5);
+        Param poles(0.0, min=0.0, max=1.0);
+        Param drive(1., min=1., max=20); //sounds cool up to 6
+
+        //smoothing for fx mixer
+        sWidth = mixSmooth(width, .95);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .95);
+        sGain = mixSmooth(gain, .95);
+        sDrywet = mixSmooth(drywet, .95);
+
+        //param scaling pre-smooth
+        q = pow(Q, (1 - (poles * .5))); 
+
+        //more smoothing
+        sFc = mixSmooth(fc, .95); //new topology highly resistant to blow outs
+        sXfade = mixSmooth(xfade, .999);
+        sQ  = mixSmooth(Q, .999);
+        sPoles = mixSmooth(poles, .999);
+        sDrive = mixSmooth(drive, .999);
+        
+        yL, yR = svfZdfNL4Pole(dryL, dryR, sFc, sQ, sXfade, sPoles, sDrive);
+        yL, yR = fxMixer(dryL, dryR, yL, yR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+        return yL, yR;
+    }
+
+    degradeFilter(dryL, dryR, wetL, wetR){ 
+
+        //for fx mixer
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(0.5, min=0.0, max=1.0);
+
+        //for filter
+        Param fc(1000, min=0, max=7000);
+
+        //smoothing for fx mixer
+        sWidth = mixSmooth(width, .95);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .95);
+        sGain = mixSmooth(gain, .95);
+        sDrywet = mixSmooth(drywet, .95);
+
+        //more
+        sFc = mixSmooth(fc, .99);
+
+        a, b, s = resLowCoefDS(sFc, .7);
+
+        yL = resLowDirty(wetL, a, b, s);
+        yR = resLowDirty(wetR, a, b, s);
+
+        yL, yR = fxMixer(dryL, dryR, yL, yR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+        return yL, yR;
+
+    }
+
+    distortion(dryL, dryR){
+
+        History filterFlag(1.0);
+        History a(0.0);
+        History b(0.0);
+        History s(0.0);
+
+        History a0HS;
+        History a1HS;
+        History a2HS;
+        History b1HS;
+        History b2HS;
+
+        History a0LS;
+        History a1LS;
+        History a2LS;
+        History b1LS;
+        History b2LS;
+
+        //for fx mixer
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(0.5, min=0.0, max=1.0);
+
+        //fx params
+        Param drive(1);
+        Param shape(0, min=0, max =.25);
+        Param tone(0, min=0, max =.25);
+
+
+        //smoothing for fx mixer
+        sWidth = mixSmooth(width, .95);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .95);
+        sGain = mixSmooth(gain, .95);
+        sDrywet = mixSmooth(drywet, .95);
+
+        //fx smoothing
+        sDrive = mixSmooth(drive, .99);
+        sShape = mixSmooth(shape, .99);
+        sTone = mixSmooth(tone, .99);
+
+
+            if (filterFlag == 1){
+                    filterFlag = 0;
+                    a, b, s = resLowCoef(2500, .55);
+                    a0HS, a1HS, a2HS, b1HS, b2HS = biqaudHS(500., 0.108, 1.78);
+                    a0LS, a1LS, a2LS, b1LS, b2LS = biquadLS(2000., 0.171, 2.342);
+                }
+            else {
+                a = a;
+                b = b;
+                s = s;
+
+                a0HS = a0HS;
+                a1HS = a1HS;
+                a2HS = a2HS;
+                b1HS = b1HS;
+                b2HS = b2HS;
+
+                a0LS = a0LS;
+                a1LS = a1LS;
+                a2LS = a2LS;
+                b1LS = b1LS;
+                b2LS = b2LS;
+            }
+
+        shape1, shape2 = stereoXfade(sShape);
+        tone1, tone2 = stereoXfade(sTone);
+
+        xL = dcblock(dryL);
+        xR = dcblock(dryR);
+
+        xL = cNL(xL);
+        xR = cNL(xR);
+
+        xL = resLowpassPC(xL, a, b, s);
+        xR = resLowpassPC(xR, a, b, s);
+
+        softL = softDist(xL, sDrive);
+        softR = softDist(xR, sDrive);
+
+        rectL = rectDist(xL, sDrive);
+        rectR = rectDist(xR, sDrive);
+
+        xL = (softL * shape1) + (rectL * shape2);
+        xR = (softR * shape1) + (rectR * shape2);
+
+        hiL = biquadDF2(xL, a0HS, a1HS, a2HS, b1HS, b2HS);
+        hiR = biquadDF2(xR, a0HS, a1HS, a2HS, b1HS, b2HS);
+
+        loL = biquadDF2(xL, a0LS, a1LS, a2LS, b1LS, b2LS);
+        loR = biquadDF2(xR, a0LS, a1LS, a2LS, b1LS, b2LS);
+
+        xL = (xL * .5) + (loL * tone2) + (hiL * tone1);
+        xR = (xR * .5) + (loR * tone2) + (hiR * tone1);
+
+        outL = dcblock(xL * .5);
+        outR = dcblock(xR * .5);
+
+
+        yL, yR = fxMixer(dryL, dryR, outL, outR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+        return yL, yR;
+
+    }
+
+    freqChorus(dryL, dryR, p){
+
+        //for lfo ds
+        History ds(0.0);
+
+        History lfoP(0.0);
+        History lfoD(0.0);
+        History lfoAP(0.0);
+
+        History lfoPA(0.0);
+        History lfoDA(0.0);
+
+
+        History lfoPB(0.0);
+        History lfoDB(0.0);
+        History lfoAPB(0.0);
+
+        History lfoPC(0.0);
+        History lfoDC(0.0);
+
+        Param envFlag(0., min=0., max=1);
+
+        //for fx mixer
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(0.5, min=0.0, max=1.0);
+
+        //for LFO
+        Param wFSel(0.0, min=0.0, max=4.0);
+        Param duty(1, min=0.0, max=1.0);
+        Param depth(1, min=-1., max=1.0);
+
+        //fx specifc
+        Param fb(0.0, min=-1.1, max=1.1);
+        Param dTime(0.0, min=5., max=samplerate);
+        Param diffuse(0.0, min=-1.0, max=1.0);
+        Param fbFDN(0., min=-1., max =1.);
+        Param dTimeFDN(0, min=0);
+        Param shimmer(.7, min=0, max=1);
+
+        eFb = fb * envFlag;
+        eFbFDN = fbFDN * envFlag;
+
+        //smoothing for fx mixer
+        sWidth = mixSmooth(width, .95);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .95);
+        sGain = mixSmooth(gain, .95);
+        sDrywet = mixSmooth(drywet, .95);
+
+        //smoothing for LFO controls
+        sDuty = mixSmooth(duty, .95);
+        sDepth = mixSmooth(depth, .999);
+
+        //more smoothing
+        sFb = mixSmooth(eFb, .95);
+        sDTime = mixSmooth(dTime, .99999);
+        sDiffuse = mixSmooth(diffuse, .95);
+        sFbFDN = mixSmooth(eFbFDN, .95);
+        sDTimeFDN = mixSmooth(dTimeFDN, .999);
+        sShimmer = mixSmooth(shimmer, .99);
+
+        //phase accum for quad lfos
+        pOffsetA = (p + .25) % 1.;
+        pOffsetB = (p + .5) % 1.;
+        pOffsetC = (p + .75) % 1.;
+
+        //calc for ds
+        //downSamp = floor(samplerate * .00266666666);
+        downSamp = floor(samplerate * 0.00033333333);
+
+        //ds count
+        dsCount = wrap((ds + 1), 0, downSamp);
+        ds = dsCount;
+
+        //quadrature lfo named stupidly: lfo = 0.0 lfoA = .25 lfoB = .5 lfoC = .75
+        lfoB = 0;
+        lfoC = 0;
+        lfo = 0;
+        lfoA = 0;
+        if (dsCount == 0){
+            lfoB = fsLFO3(pOffsetB, wFSel, sDuty);
+            lfoB = (lfoB * .5) + .5;
+            lfoB = (lfoB * sDepth);
+
+            lfoPB = (lfoB * .025);                          //lfo for pitch
+            lfoDB = mstosamps((lfoB * sDTime) + sDTime);    //lfo for comb/delay
+            lfoAPB = lfoDB * .21;                           //lfo for ap network
+
+            lfoC = fsLFO4(pOffsetC, wFSel, sDuty);
+            lfoC = (lfoC * .5) + .5;
+            lfoC = (lfoC * sDepth);
+
+            lfoDC = mstosamps((lfoC * sDTime) + sDTime);
+
+
+            lfo = fsLFO(p, wFSel, sDuty);
+            lfo = (lfo * .5) + .5;
+            lfo = (lfo * sDepth);
+
+            lfoP = (lfo * .025) + .02; 
+            lfoD = mstosamps((lfo * sDTime) + sDTime);
+            lfoAP = lfoD * .13;
+
+            lfoA = fsLFO2(pOffsetA, wFSel, sDuty);
+            lfoA = (lfoA * .5) + .5;
+
+            lfoA = (lfoA * sDepth);
+            lfoDA = mstosamps((lfoA * sDTime) + sDTime);
+
+            }
+            else {
+            lfoP = lfoP;
+            lfoD = lfoD;
+            lfoAP = lfoAP;
+
+            lfoPA = lfoPA;
+            lfoDA = lfoDA;
+
+
+            lfoPB = lfoPB;
+            lfoDB = lfoDB;
+            lfoAPB = lfoAPB;
+
+            lfoPC = lfoPC;
+            lfoDC = lfoDC;
+
+        }
+
+        //Freq chorus effect
+        //smear
+        diff0 = 0;
+        diff1 = 0;
+        if (shimmer < 1.){
+                diff0, diff1 = combFDN2x2(dryL, (lfoAP + sDTimeFDN), sFbFDN, sShimmer, //input delaytime feedback damping
+                                        dryR, (lfoAPB + sDTimeFDN), sFbFDN, sShimmer);
+
+                diff0 = (diff0 * sDiffuse);
+                diff1 = (diff1 * sDiffuse);
+
+            }
+            else {
+                diff0 = 0;
+                diff1 = 0;
+            }
+
+        diff0 = dcblock(diff0);
+        diff1 = dcblock(diff1);
+
+        pitchShiftL = pitchShift((diff0 + dryL) * .5, lfoPB);                               //delay freqshift
+        fChorusLT1, fChorusLT2 = combTanh2(pitchShiftL, lfoDB, lfoDC, sFb);     //delay comb
+
+        pitchShiftR = pitchShift((diff1 + dryR) * .5, lfoP);
+        fChorusRT1, fChorusRT2 = combTanh2(pitchShiftR, lfoD, lfoDA, sFb);
+
+        fChorusL = fChorusLT1 + fChorusRT2 + diff0;                              //cross-correlate
+        fChorusR = fChorusRT1 + fChorusLT2 + diff1;
+
+        outFlag = aCheckStereo(fChorusL, fChorusR, .95, .000001);
+
+        yL, yR = fxMixer(dryL, dryR, fChorusL, fChorusR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+        return yL, yR, outFlag;
+
+    }
+
+    freqDelay(dryL, dryR){
+    
+        History	phaseAccum(0);
+        History	clear(1);	
+        History leftFb(0);
+        History rightFb(0);
+
+        Data circleDelay(samplerate * 5, 2);			
+
+        Param envFlag(0., min=0., max=1);
+
+        //for fx mixer
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(0.5, min=0.0, max=1.0);
+
+        //fx params
+        Param dTime(11025, min=0);		
+        Param fb(0);
+        /* 
+        mode 0 = stereo
+        mode 1 = pingpong LR
+        mode 2 = pingpong RL
+        mode 3 = reverse
+        mode 4 = reverse pp LR
+        mode 5 = rev pp RL
+        mode 6 = glitch
+        mode 7 = glitch pingpong LR
+        mode 8 = glitch pingpong RL
+        */
+        Param mode(0);
+        Param pS(0, min=0, max=2); //mode
+        Param pSA(0.); // amount
+        Param filter(0, min=0, max=1); //switch
+        Param fc(1500., min=0., max=7000.); 
+        Param xfade(0., min=0., max=.25);
+        Param gMult(.2);
+
+        eFb = fb * envFlag;
+
+        //smoothing for fx mixer
+        sWidth = mixSmooth(width, .999);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .999);
+        sGain = mixSmooth(gain, .999);
+        sDrywet = mixSmooth(drywet, .999);
+
+        //fx params
+        sFb = mixSmooth(eFb, .99);
+        sPSA = mixSmooth(pSA, .99);
+        sFc = mixSmooth(fc, .999);
+        sXfade = mixSmooth(xfade, .999);
+        sDTime = mixSmooth(dTime, .99995);
+        SGMult = mixSmooth(gMult, .9999);
+
+        buffSize = dim(circleDelay);
+
+        //phase accum
+        writePhase	= wrap((phaseAccum + 1), 0, buffSize);
+        phaseAccum = writePhase;
+
+        readPhase = 0;
+        if (mode == 0 || mode == 1 || mode == 2){
+                readPhase = wrap((writePhase - sDTime), 0, buffSize); //forward
+            }
+            else if (mode == 3 || mode == 4 || mode == 5){
+                writePhaseB = buffSize - writePhase;
+                readPhase = wrap((writePhaseB + sDTime), 0, buffSize); //rev
+            }
+            else if (mode == 6 || mode == 7 || mode == 8){
+                writePhaseB = buffSize - writePhase;
+                readPhase = fold((writePhaseB * SGMult) + sDTime, 0, buffSize); //glitch
+                readPhase = floor(readPhase);
+        }   
+            
+        dL = 0;
+        dR = 0;
+
+        if (mode == 0 || mode == 3 || mode == 6){ 
+                
+                dL = dryL + leftFb; //stereo
+                dR = dryR + rightFb;  
+            }
+            else if (mode == 1 || mode == 4 || mode == 7){
+                
+                dL = (dryL * .5) + (dryR * .5) + rightFb; //pingpong LR
+                dR = leftFb;
+            }
+            else if (mode == 2 || mode == 5 || mode == 8){
+                
+                dL = rightFb;                              //pingpong RL
+                dR = (dryL * .5) + (dryR * .5) + leftFb;
+        }
+        //may not need
+        //if(change(mode) != 0) clear = 1;
+        if (clear) {
+            for(i = 0; i < buffSize; i += 1) {
+                poke(circleDelay, 0, i, 0, 0, index="samples");
+                poke(circleDelay, 0, i, 1, 0, index="samples");
+            }
+            clear = 0;	
+        }
+
+        poke(circleDelay, dL, writePhase,	0, 0, index="samples");
+        poke(circleDelay, dR, writePhase,	1, 0, index="samples");
+
+        outL = sample(circleDelay, readPhase, 0, index="samples", interp="step");
+        outR = sample(circleDelay, readPhase, 1, index="samples", interp="step");
+
+        fbOutL = outL;
+        fbOutR = outR;
+
+
+        if (filter == 0){
+                fbOutL = fbOutL;
+                fbOutR = fbOutR;
+            }
+            else if (filter == 1){
+                fbOutL = onepoleXfade(fbOutL, sXfade, sFc);
+                fbOutR = onepoleXfade(fbOutR, sXfade, sFc);
+        }
+
+
+        if (pS == 0){
+                fbOutL = fbOutL;
+                fbOutR = fbOutR;
+            }
+            else if (pS == 1){
+                fbOutL = pitchShift((fbOutL *  .5), sPSA) + outL * .5;
+                fbOutR = pitchShift((fbOutR * .5), sPSA) + outR  * .5; 
+            }
+            else if (pS == 2){
+                fbOutL = pitchShift(fbOutL, sPSA);
+                fbOutR = pitchShift(fbOutR, sPSA); 
+        }
+
+
+        if (fb >= .99 || fb <= -.99){
+                fbOutL = tanhL(fbOutL);
+                fbOutR = tanhL(fbOutR); 
+            }
+            else {
+                fbOutL = fbOutL;
+                fbOutR = fbOutR;
+        }
+
+        leftFb = fbOutL * sFb;
+        rightFb = fbOutR * sFb;
+
+        outFlag = aCheckStereo(outL, outR, .95, .000001);
+
+        yL, yR = fxMixer(dryL, dryR, outL, outR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+        return yL, yR, outFlag;
+
+    }
+
+    freqFlange(dryL, dryR, p){
+        //for lfo ds
+        History ds(0.0);
+        History lfoPL(0.0);
+        History lfoDL(0.0);
+        History lfoPR(0.0);
+        History lfoDR(0.0);
+        
+        Param envFlag(0., min=0., max=1);
+
+        //for fx mixer
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(0.5, min=0.0, max=1.0);
+
+        //for LFO
+        Param wFSel(0.0, min=0.0, max=4.0);
+        Param duty(1, min=0.0, max=1.0);
+        Param offset(0.0, min=0.0, max=1.0);
+        Param depth(1, min=-1.0, max=1.0);
+
+        //fx specifc
+        Param fb(0.0, min=-1.1, max=1.1);
+        Param dTime(0.0, min=.4, max=samplerate);
+
+        eFb = fb * envFlag;
+
+        //smoothing for fx mixer
+        sWidth = mixSmooth(width, .95);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .95);
+        sGain = mixSmooth(gain, .95);
+        sDrywet = mixSmooth(drywet, .95);
+
+        //smoothing for LFO controls
+        sDuty = mixSmooth(duty, .95);
+        sOffset = mixSmooth(offset, .95);
+        sDepth = mixSmooth(depth, .95);
+
+        //more smoothing
+        sFb = mixSmooth(eFb, .95);
+        sDTime = mixSmooth(dTime, .9999);
+
+        //calc for ds
+        //downSamp = floor(samplerate * .00266666666);
+        downSamp = floor(samplerate * 0.00033333333);
+        
+        //phase accum for lfos
+        pOffset = (p + sOffset) % 1.;
+
+        dsCount = wrap((ds + 1), 0, downSamp);
+        ds = dsCount;
+
+        //LFO1
+        lfoL = 0;
+        lfoR = 0;
+        if (dsCount == 0){
+                lfoL = fsLFO2(pOffset, wFSel, sDuty);
+                lfoL = (lfoL * .5) + .5;
+                lfoL = (lfoL * sDepth); 
+
+                lfoPL = (lfoL * .025);
+                lfoDL = mstosamps((lfoL * sDTime) + sDTime);
+                
+                lfoR = fsLFO(p, wFSel, sDuty);
+                lfoR = (lfoR * .5) + .5;
+                lfoR = (lfoR * sDepth);
+
+                lfoPR = (lfoR * .025) + .02; 
+                lfoDR = mstosamps((lfoR * sDTime) + sDTime);
+            }
+            else {
+                lfoDL = lfoDL;
+                lfoPL = lfoPL;
+                
+                lfoDR = lfoDR;
+                lfoPR = lfoPR;
+            }
+
+        //Freq Flange effect
+        fFlangeL = pitchShift(dryL, lfoPL);
+        fFlangeL = combTanh(fFlangeL, lfoDL, sFb);
+        fFlangeL = dcblock(fFlangeL);
+
+        fFlangeR = pitchShift(dryR, lfoPR);
+        fFlangeR = combTanh(fFlangeR, lfoDR, sFb);
+        fFlangeR = dcblock(fFlangeR);
+
+        outFlag = aCheckStereo(fFlangeL, fFlangeR, .95, .000001);
+
+        fFlangeL, fFlangeR = fxMixer(dryL, dryR, fFlangeL, fFlangeR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+        return fFlangeL, fFlangeR, outFlag;
+
+    }
+
+    freqVerb(dryL, dryR){
+        Param envFlag(0., min=0., max=1);
+
+        //for fx mixer
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(.5, min=0.0, max=1.0);
+
+        //fx sepcific
+        Param fb(0., min=-1., max=1.0);
+        Param dTime(samplerate * .145, min=0.0, max=samplerate * .5);
+        Param preDTime(30, min=0.0, max=samplerate);
+        Param dampLo(.9, min=0.0, max=1.0);
+        Param dampHi(.9, min =0, max=1);
+
+        //delays
+        Delay preD(samplerate);
+
+        eFb = envFlag * fb; // delay clear
+
+        //smoothing for fx mixer
+        sWidth = mixSmooth(width, .95);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .95);
+        sGain = mixSmooth(gain, .95);
+        sDrywet = mixSmooth(drywet, .95);
+
+        //more smothing
+        sFb = mixSmooth(eFb, .99);
+        sDTime = mixSmooth(dTime, .999);
+        sPreDTime = mixSmooth(preDTime, .999);
+        sDampLo = mixSmooth(dampLo, .99);
+        sDampHi = mixSmooth(dampHi, .99);
+
+        //param scaling
+        diffD = sDTime / samplerate;
+
+        //predelay tap
+        preDTap = preD.read(sPreDTime, interp="linear");
+
+        //FDN Values
+        lateDT0 = sDTime;
+        lateDT1 = sDTime * .81649;
+        lateDT2 = sDTime * .7071;
+        lateDT3 = sDTime * .63245;
+
+        lateFb0 = sFb;
+        lateFb1 = sFb;
+        lateFb2 = sFb;
+        lateFb3 = sFb;
+
+        lateLp0 = sDampLo * .5;
+        lateLp1 = sDampLo * .5;
+        lateLp2 = sDampLo * .5;
+        lateLp3 = sDampLo * .5;
+
+        //diffusion values
+        diffD0 = randPrime(samplerate * .1, samplerate * .1) * diffD;
+        diffD1 = randPrime(samplerate * .05, samplerate * .05) * diffD;
+        diffD2 = randPrime(samplerate * .03, samplerate * .03) * diffD;
+        diffD3 = randPrime(samplerate * .11, samplerate * .11) * diffD;
+
+        diffLp = sDampLo;
+
+        //stereo in >> scaled mono && lp/hp filtering
+        revIn = (dryL * .707946) + (dryR * .707946);
+        revIn = mixSmooth(revIn, sDampLo);
+        revIn = mixSmoothHP(revIn, sDampHi);
+
+        //pre Delay
+        preD.write(revIn);
+        revIn = preDTap;
+
+        //diffusion network
+        y0, y1, y2, y3 = apCircle4x(revIn, diffD0, 1.,
+                                        revIn, diffD1, //input, delaytime gain
+                                            revIn, diffD2,
+                                                revIn, diffD3,
+                                                            diffLp);
+
+
+
+        //FDN
+        FDN0, FDN1, FDN2, FDN3 = combFDN4x4(y0, lateDT0, lateFb0, lateLp0,
+                                                y1, lateDT1, lateFb1, lateLp1,
+                                                    y2, lateDT2, lateFb2, lateLp2,
+                                                        y3, lateDT3, lateFb3, lateLp3);
+
+
+        revOutL = FDN0 + y1 + FDN2 + y3;
+        revOutR = FDN1 + y0 + FDN3 + y2;
+
+        outFlag = aCheckStereo(revOutL, revOutR, .95, .000001);
+
+        yL, yR = fxMixer(dryL, dryR, revOutL, revOutR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+        return yL, yR, outFlag;
+
+    }
+
+    futzFilter(dryL, dryR){
+        //for fx mixer
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(0.5, min=0.0, max=1.0);
+
+        //for fx
+        Param a(4., min=0, max=20);
+        Param xfade(0., min=0, max=.25);
+        Param noise(0, min=0, max=1);
+        Param acG(0, min=0, max=1);
+        Param acP(60, min=50, max=70);
+
+        //smoothing for fx mixer
+        sWidth = mixSmooth(width, .95);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .95);
+        sGain = mixSmooth(gain, .95);
+        sDrywet = mixSmooth(drywet, .95);
+
+        //more smoothing
+        sA = mixSmooth(a, .99);
+        sXfade = mixSmooth(xfade, .99);
+        sNoise = mixSmooth(noise, .99);
+        sACG = mixSmooth(acG, .99);
+        sACP = mixSmooth(acP, .99);
+        
+        //phones are mono =p
+        tele = (dryL + dryR) * .5;    
+        tele = teleFilterXfade(tele, sA, sXfade, sNoise, sACP, sACG);
+        yL, yR = fxMixer(dryL, dryR, tele, tele, sWidth, sHaas, sBal, sGain, sDrywet);     
+
+        return yL, yR;
+
+    }
+
+    pitchShiftFX(dryL, dryR){
+
+        //for fx mixer
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(0.5, min=0.0, max=1.0);
+
+        //fx
+        Param pitch(1);
+
+        //smoothing for fx mixer
+        sWidth = mixSmooth(width, .95);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .95);
+        sGain = mixSmooth(gain, .95);
+        sDrywet = mixSmooth(drywet, .95);
+
+        //more smothing
+        sPitch = mixSmooth(pitch, .999);
+
+        yL = pitchShift(dryL, sPitch);
+        yR = pitchShift(dryR, sPitch);
+
+        yL = yL * 2;
+        yR = yR * 2;
+
+        yL, yR = fxMixer(dryL, dryR, yL, yR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+        return yL, yR;
+
+    }
+
+    industryStandard(dryL, dryR, p){
+
+        //lfo ds
+        History ds(0.0);
+        History lfoL(0.0);
+        History lfoR(0.0);
+
+        Param envFlag(0., min=0., max=1);
+
+        //for fx mixer
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(0.5, min=0.0, max=1.0);
+
+        //for LFO
+        Param wFSel(0.0, min=0.0, max=4.0);
+        Param duty(1, min=0.0, max=1.0);
+        Param offset(0.0, min=0.0, max=1.0);
+        Param depth(1, min=-1.0, max=1.0);
+
+        //fx specifc
+        Param fb(0.0, min=-1.0, max=1.0);
+        Param dTime(1., min=0.0, max=samplerate);
+
+        eFb = fb * envFlag;
+
+        //smoothing for fx mixer
+        sWidth = mixSmooth(width, .95);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .999);
+        sGain = mixSmooth(gain, .95);
+        sDrywet = mixSmooth(drywet, .95);
+
+        //smoothing for LFO controls
+        sDuty = mixSmooth(duty, .999);
+        sOffset = mixSmooth(offset, .999);
+        sDepth = mixSmooth(depth, .99995);
+
+        //more smoothing
+        sFb = mixSmooth(eFb, .99);
+        sDTime = mixSmooth(dTime, .99995);
+
+        //calc for ds
+        //downSamp = floor(samplerate * .00266666666);
+        downSamp = floor(samplerate * 0.00033333333);
+
+        //lfo accum
+        pOffset = (p + sOffset) % 1.;
+
+        dsCount = wrap((ds + 1), 0, downSamp);
+        ds = dsCount;
+
+        //LFO
+        if (dsCount == 0){
+                lfoL = fsLFO2(pOffset, wFSel, sDuty);
+                lfoL = (lfoL * .5) + .5;
+                lfoL = (lfoL * sDepth);
+                lfoL = mstosamps((lfoL * sDTime) + sDTime);
+
+                lfoR = fsLFO(p, wFSel, duty);
+                lfoR = (lfoR * .5) + .5;
+                lfoR = (lfoR * sDepth);
+                lfoR = mstosamps((lfoR * sDTime) + sDTime);
+            }
+            else {
+                lfoL = lfoL;
+                lfoR = lfoR;
+        }
+
+        //IS effect
+        ISL = combIS(dryL, lfoL, sFb);
+        ISR = combIS(dryR, lfoR, sFb);
+        ISL = dcblock(ISL);
+        ISR = dcblock(ISR);
+
+        outFlag = aCheckStereo(ISL, ISR, .95, .000001);
+
+        ISL, ISR = fxMixer(dryL, dryR, ISL, ISR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+        return ISL, ISR, outFlag;
+
+    }
+
+    resonator(dryL, dryR){
+        
+        Param envFlag(0., min=0., max=1);
+        
+        //for fx mixer
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(0.5, min=0.0, max=1.0);
+
+        //for fx
+        Param p0(440);
+        Param p1(440);
+        Param p2(440);
+        Param p3(440);
+
+        Param d0(.7);
+        Param d1(.7);
+        Param d2(.7);
+        Param d3(.7);
+
+        Param damp(.5, min=0, max=1.);
+
+        //smoothing for fx mixer
+        sWidth = mixSmooth(width, .95);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .95);
+        sGain = mixSmooth(gain, .95);
+        sDrywet = mixSmooth(drywet, .95);
+
+        //more smoothing
+        sP0 = mixSmooth(p0, .999);
+        sP1 = mixSmooth(p1, .999);
+        sP2 = mixSmooth(p2, .999);
+        sP3 = mixSmooth(p3, .999);
+
+        sD0 = mixSmooth(d0, .95) * envFlag;
+        sD1 = mixSmooth(d1, .95) * envFlag;
+        sD2 = mixSmooth(d2, .95) * envFlag;
+        sD3 = mixSmooth(d3, .95) * envFlag;
+
+        sigAdd = (dryL * .7) + (dryR * .7);
+
+        res0 = combIS(sigAdd, sP0, sD0);
+
+        res1 = combIS(sigAdd, sP1, sD1);
+        res1L, res1R = panMtoS(res1, 0.0625);
+
+        res2 = combIS(sigAdd, sP2, sD2);
+        res2L, res2R = panMtoS(res2, 0.1875);
+
+        res3 = combIS(sigAdd, sP3, sD3);
+
+        yL = (res0 * .33) + (res1L * .33) + (res2L * .33);
+        yR = (res1R * .33) + (res2R * .33) + (res3 * .33);
+
+        yL = mixSmooth(yL, damp);
+        yR = mixSmooth(yR, damp);
+
+        outFlag = aCheckStereo(yL, yR, .95, .000001);
+
+        yL, yR = fxMixer(dryL, dryR, yL, yR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+        return yL, yR, outFlag;
+
+    }
+
+    ringMod(dryL, dryR, p){
+        //for lfo ds
+        History ds(0.0);
+        History lfoL(0.0);
+        History lfoR(0.0);
+
+        //for fx mixer
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(0.5, min=0.0, max=1.0);
+
+        //for LFO
+        Param wFSel(0.0, min=0.0, max=4.0);
+        Param duty(1, min=0.0, max=1.0);
+        Param offset(0.0, min=0.0, max=1.0); //offset was interfering with tanhARO
+        Param depth(1, min=-1.0, max=1.0);
+
+        //ARO
+        Param freq(440, min=0);
+
+        //smoothing for fx mixer
+        sWidth = mixSmooth(width, .95);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .95);
+        sGain = mixSmooth(gain, .95);
+        sDrywet = mixSmooth(drywet, .95);
+
+        //smoothing for LFO contrls
+        sDuty = mixSmooth(duty, .999);
+        sOffset = mixSmooth(offset, .999);
+        sDepth = mixSmooth(depth, .999);
+
+        //more smothing
+        sFreq = mixSmooth(freq, .99);
+
+        //calc for ds
+        //downSamp = floor(samplerate * .00266666666);
+        downSamp = floor(samplerate * 0.00033333333);
+                
+        //phase accum for lfos
+        pOffset = (p + sOffset) % 1.;
+
+        dsCount = wrap((ds + 1), 0, downSamp);
+        ds = dsCount;
+        //lfo
+        if (dsCount == 0){
+                lfoL = fsLFO2(pOffset, wFSel, sDuty);
+                lfoL = (lfoL * .5) + .5;
+                lfoL = (lfoL * sDepth) + (1 - sDepth);
+
+                lfoR = fsLFO(p, wFSel, sDuty);
+                lfoR = (lfoR * .5) + .5;
+                lfoR = (lfoR * sDepth) + (1 - sDepth);
+            }
+            else {
+                lfoL = lfoL;
+                lfoR = lfoR;
+
+        }
+
+        mod = cycle(sFreq);
+        modL = basicRM(mod, lfoL);
+        modR = basicRM(mod, lfoR);
+
+        yL = balRM(dryL, modL);
+        yR = balRM(dryR, modR);
+
+        yL, yR = fxMixer(dryL, dryR, yL, yR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+        return yL, yR;
+
+    }
+
+    shortTimeReversal(dryL, dryR){
+        //phase accum
+        History	writePhaseAccum(0);
+        History grainPhaseAccum(0);
+        //store grain offset index for latch
+        History grainOff(0);
+        History	clear(1);	
+        //for grain
+        Data circleDelay(samplerate * 5, 2);
+        //for preDelay
+        Delay pGL(samplerate);
+        Delay pgR(samplerate);	
+
+        Param envFlag(0., min=0., max=1);
+
+        //for fx mixer
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(0.5, min=0.0, max=1.0);
+
+        //fx Params
+        Param pGtime(1, min=0, max=samplerate);
+        Param fb(0, min=-1, max=1);		
+        //gSize should be even
+        Param gSize(2000, min=4); //not smoothed b/c latch
+
+        eFb = fb * envFlag;
+
+        //smoothing for fx mixer
+        sWidth = mixSmooth(width, .95);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .95);
+        sGain = mixSmooth(gain, .95);
+        sDrywet = mixSmooth(drywet, .95);
+
+        //fx Params smoothed
+        sFb = mixSmooth(eFb, .95);
+        sPGTime = mixSmooth(pGtime, .9999);
+        sGSize = round(gSize, 2);
+        
+
+        buffSize = dim(circleDelay);
+
+        //pregrain taps
+        pGTapL = pGL.read(sPGTime);
+        pGTapR = pgR.read(sPGTime);
+
+        //write/read index
+        writePhase	= wrap((writePhaseAccum + 1), 0, buffSize);
+        writePhaseAccum = writePhase;
+        writePhzr = writePhase / buffSize;
+
+        grainIndex = latch(sGSize, (grainPhaseAccum == 0)); 
+        readIndex = latch((writePhase - 1), (grainPhaseAccum == 0)); //dTime for grains hardwired to z-1
+        readIndexOffset = latch(readIndex, (grainOff == 0));
+
+        grainPhase = wrap((grainPhaseAccum + 1), 0, grainIndex);
+        grainPhaseAccum = grainPhase;
+        gPhzr = grainPhase / grainIndex;
+
+        grainPhaseOffset = ((grainPhase + (.5 * grainIndex)) % grainIndex); 
+
+        grainOff = grainPhaseOffset;
+        gPhzrOffset = (gPhzr + .5) % 1.;
+
+        readPhase1 = wrap((readIndex - grainPhase), 0, buffSize);
+        readPhase2 = wrap((readIndexOffset - grainPhaseOffset), 0, buffSize);
+
+        //windows
+        win1 = hannWin(gPhzr);
+        win2 = hannWin(gPhzrOffset);
+
+        //inputs/predelay
+        inL = dryL + pGTapL;
+        inR = dryR + pGTapR;
+
+        pGL.write(inL * sFb);
+        pgR.write(inR * sFb);
+
+        //may not need this
+        if (clear) {
+            
+            for(i = 0; i < buffSize; i += 1) {
+                
+                poke(circleDelay, 0, i, 0, 0, index="samples");
+                poke(circleDelay, 0, i, 1, 0, index="samples");
+            
+            }
+
+            clear = 0;	
+
+        }
+
+        //buff ops
+        poke(circleDelay, inL, writePhase,	0, 0, index="samples");
+        poke(circleDelay, inR, writePhase,	1, 0, index="samples");
+
+        tapL1 = sample(circleDelay, readPhase1, 0, index="samples", interp="linear");
+        tapL2 = sample(circleDelay, readPhase2, 0, index="samples", interp="linear");
+
+        tapR1 = sample(circleDelay, readPhase1, 1, index="samples", interp="linear");
+        tapR2 =	sample(circleDelay, readPhase2, 1, index="samples", interp="linear");										//^^can remove index to use 0 >> 1 phasor for speed changes with rate
+                                                                
+        //grain envs
+        tapL1 = tapL1 * win1;
+        tapL2 = tapL2 * win2;
+
+        tapR1 = tapR1 * win1;
+        tapR2 = tapR2 * win2;
+
+        outL = tapL1 + tapL2;
+        outR = tapR1 + tapR2;
+
+        outFlag = aCheckStereo(outL, outR, .95, .000001);
+
+        yL, yR = fxMixer(dryL, dryR, outL, outR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+        return yL, yR, outFlag;
+
+    }
+
+    stereoTrem(dryL, dryR, p){
+        //for lfo ds
+        History ds(0.0);
+        History lfoL(0.0);
+        History lfoR(0.0);
+
+        //for fx mixer
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(0.5, min=0.0, max=1.0);
+
+        //for LFO
+        Param wFSel(0.0, min=0.0, max=4.0);
+        Param duty(1, min=0.0, max=1.0);
+        Param offset(0.0, min=0.0, max=1.0);
+        Param depth(1, min=-1.0, max=1.0);
+
+        //smoothing for fx mixer
+        sWidth = mixSmooth(width, .999);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .999);
+        sGain = mixSmooth(gain, .999);
+        sDrywet = mixSmooth(drywet, .999);
+
+        //smoothing for LFO contrls
+        sDuty = mixSmooth(duty, .999);
+        sOffset = mixSmooth(offset, .999);
+        sDepth = mixSmooth(depth, .999);
+
+        //calc for ds
+        //downSamp = floor(samplerate * .00266666666);
+        downSamp = floor(samplerate * 0.00033333333);
+                
+        //phase accum for lfos
+        pOffset = (p + sOffset) % 1.;
+
+        dsCount = wrap((ds + 1), 0, downSamp);
+        ds = dsCount;
+        //lfo
+        if (dsCount == 0){
+                lfoL = fsLFO2(pOffset, wFSel, sDuty);
+                lfoL = (lfoL * .5) + .5;
+                lfoL = (lfoL * sDepth) + (1 - sDepth);
+
+                lfoR = fsLFO(p, wFSel, sDuty);
+                lfoR = (lfoR * .5) + .5;
+                lfoR = (lfoR * sDepth) + (1 - sDepth);
+            }
+            else {
+                lfoL = lfoL;
+                lfoR = lfoR;
+
+        }
+        //trem effect
+        modL = basicRM(dryL, lfoL);
+        modR = basicRM(dryR, lfoR);
+
+        yL, yR = fxMixer(dryL, dryR, modL, modR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+        return yL, yR;
+
+    }
+
+    stutter(dryL, dryR){
+
+        History leftfb(0);
+        History rightfb(0);
+        History winFlag(1);
+
+        Data stutterStereo(samplerate * 5, 2);
+        Data winData(8192);
+
+        //for fx mixer
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(0.5, min=0.0, max=1.0);
+
+        //fx params
+        Param stutterTime(min=0);
+        Param stutter(0, min=0, max=1); //switch
+        Param direction(0, min=0, max=1); //0 for 1 rev
+        Param pS(0, min=0, max=1); //switch
+        Param pitch(1);
+        Param filter(0); //switch
+        Param xfade(0., min=0., max=.25);
+        Param bypass(0, min=0, max=1); //stutter mode
+
+        //make window
+        if (winFlag){
+            winFlag = 0;
+            for (i = 0; i < 8192; i += 1){
+                winPhase = i / 8192;
+                poke(winData, tukeyWin((i / 8192), 10), i,	0, 0, index="samples");
+            }
+        }
+
+        dSize = dim(stutterStereo);
+
+        //smoothing for fx mixer
+        sWidth = mixSmooth(width, .95);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .95);
+        sGain = mixSmooth(gain, .95);
+        sDrywet = mixSmooth(drywet, .95);
+
+        //Inputs
+        stutterInv = 1 - stutter;
+        inL = dryL * stutterInv;
+        inL = inL + leftfb;
+        inR = dryR * stutterInv;
+        inR = inR + rightfb;
+
+        //read/write index
+        writePhase = counter(1, 0, dSize);
+
+        stutterChunk = 0;
+        check = direction * stutter;
+        if (check == 0){
+                stutterChunk = wrap((writePhase - stutterTime), 0, dSize);
+            }
+            else if (check == 1){
+                writePhase = dSize - writePhase;
+                stutterChunk = wrap((writePhase + stutterTime), 0, dSize);
+        }
+        
+        //LUT window
+        envPhase = counter(1, stutterInv, stutterTime);
+        envPhase = envPhase / stutterTime;
+        env = sample(winData, envPhase, 0, index="phase", interp="cubic");
+        //buffer ops
+        poke(stutterStereo, inL, writePhase, 0, 0, index="samples");
+        poke(stutterStereo, inR, writePhase, 1, 0, index="samples");
+
+        outL = sample(stutterStereo, stutterChunk, 0, index="samples", interp="step");
+        outR = sample(stutterStereo, stutterChunk, 1, index="samples", interp="step");
+
+        //out gate
+        outL = dcblock(outL) * stutter;
+        outR = dcblock(outR) * stutter;
+        
+        outL = outL * env;
+        outR = outR * env;
+
+        //do effects before fb loop
+        fxOutL = 0;
+        fxOutR = 0;
+
+        //ptich shift >> onepole xfade with fc = 1.5k(ish)
+        if (pS == 0 && filter == 0) {
+                fxOutL  = outL;
+                fxOutR = outR;
+            }
+            else if (pS == 1 && filter == 0){
+                smoothPitch = mixSmooth(pitch, .999); //only smooth when called
+                fxOutL  = pitchShift(outL, smoothPitch);
+                fxOutR = pitchShift(outR, smoothPitch);
+            }
+            else if (pS == 0 && filter == 1){
+                fxOutL = onepoleXfadeStutter(outL, xfade);
+                fxOutR = onepoleXfadeStutter(outR, xfade);
+            }
+            else if (pS == 1 && filter == 1) {
+                smoothPitch = mixSmooth(pitch, .999);
+                fxOutL  = pitchShift(outL, smoothPitch);
+                fxOutR = pitchShift(outR, smoothPitch);
+            
+                fxOutL = onepoleXfadeStutter(fxOutL, xfade);
+                fxOutR = onepoleXfadeStutter(fxOutR, xfade);
+        }
+                
+        leftfb = fxOutL;
+        rightfb = fxOutR;
+
+        //bypass or mute if not suttering
+        yL = 0;
+        yR = 0;
+        if (stutter == 1){
+                yL, yR = outL, outR;
+            }
+            else if (stutter == 0 && bypass == 0){
+                yL, yR = 0, 0;
+            }
+            else if (stutter == 0 && bypass == 1){
+                yL, yR = dryL, dryR;
+        }
+
+        yL, yR = fxMixer(dryL, dryR, yL, yR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+        return yL, yR, stutterChunk, envPhase, env;
+
+    }
+
+/*  //  //  //  //  //  //  //  //  //  //  //
+SMOOTHERS && FADERS
+*/  //  //  //  //  //  //  //  //  //  //  //
+    //param smoothing
+    mixSmooth(x, s){
+        //smooth out parameter
+        History fb(0);
+        smooth = mix(x, fb, s);
+
+        fb = smooth;
+
+        return smooth;
+
+    }
+    //super cheap HP
+    mixSmoothHP(x, s){
+        //smooth out parameter
+        History fb(0);
+        smooth = mix(x, fb, s);
+
+        fb = smooth;
+        smooth = x - smooth;
+
+        return smooth;
+
+    }
+    //two way xfade
+    stereoXfade(cross){
+        //cross = 0 >> ,25
+        offset = cross + .75;
+        xfade1 = cycle(cross, index="phase");
+        xfade2 = cycle(offset, index="phase");
+
+        return xfade1, xfade2;
+
+    }
+
+    //threeway xfade
+    cubeXfade(xfade){
+        //range 0. - .5
+        //xfade stuff
+        offset1 = xfade;
+        offset2 = xfade + .75;
+        
+        xfade1 = cycle(offset1, index="phase");
+        xfade2 = cycle(offset2, index="phase");
+        xfade3 = xfade1 * -1.;
+
+        xfade1 = clamp(xfade1, 0., 1.);
+        xfade2 = clamp(xfade2, 0., 1.);
+        xfade3 = clamp(xfade3, 0., 1.);
+
+        return xfade1, xfade2, xfade3;
+
+    }
+    //fourway xfade calc range 0. - .75
+    quadXfade(xfade){
+        //calc sinus for panning two way pan
+        offset1 = clamp(xfade, 0., .75);
+        offset2 = xfade + .75;
+        
+        //use negative sin for channels 3 - 4
+        xfade1 = cycle(offset1, index="phase");
+        xfade2 = cycle(offset2, index="phase");
+        xfade3 = xfade1 * -1.;
+        xfade4 = xfade2 * -1.;
+        
+        //limit to positive values
+        xfade1 = clamp(xfade1, 0., 1.);
+        xfade2 = clamp(xfade2, 0., 1.);
+        xfade3 = clamp(xfade3, 0., 1.);
+        xfade4 = clamp(xfade4, 0, 1.);
+
+        return xfade1, xfade2, xfade3, xfade4;
+
+    }
+/*  //  //  //  //  //  //  //  //  //  //  //
+MIXERS && FX MIXER
+*/  //  //  //  //  //  //  //  //  //  //  //
+    //mono to stereo pan
+        panMtoS(x, xfade) {
+        
+            cross = clamp(xfade, 0., .25);
+            offset = cross + .75;
+            xfade1 = cycle(cross, index="phase");
+            xfade2 = cycle(offset, index="phase");
+            yL = x * xfade1;
+            yR = x * xfade2;
+        
+            return yL, yR;
+        }   
+    /*
+    reverb mixers
+    */
+        //mixing matrix 4 in 1 out
+        mixingMatrix4I_1O(x0, x1, x2, x3){
+        
+            s1 = x0 + x1;
+            s2 = x2 + x3;
+
+            y = s1 - s2;
+
+            return y;
+
+        }
+        //stereo width MM Shroeder Style
+        mixingMatrix4I_2O(x0, x1, x2, x3){
+            
+            s1 = x0 + x1;
+            s2 = x2 + x3;
+
+            a = s1 + s2;
+            d = s1 - s2;
+            b = a * -1.;
+            c = d * -1.;
+
+            outL = a + c;
+            outR = b + d;
+
+            return outL, outR;    
+
+        }
+
+    /*
+    Fx Mixer
+    */
+        /* 
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(0.5, min=0.0, max=1.0);
+        
+        sWidth = mixSmooth(width, .95);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .95);
+        sGain = mixSmooth(gain, .95);
+        sDrywet = mixSmooth(drywet, .95);
+
+        out1, out2 = fxMixer(in1, in2, in3, in4, sWidth, sHaas, sBal, sGain, sDrywet);
+        */
+
+        stereoBypass(L, R){
+            return L, R;
+        }
+
+        msWidth(L, R, width){
+            
+            scaleL =  L * .5; 
+            scaleR = R * .5;
+            
+            mid = scaleL + scaleR;
+            side = scaleL - scaleR;
+            
+            w = side * width;
+            invW = w * -1.;
+            
+            widthL = mid + w;
+            widthR = mid + invW;
+            
+            return widthL, widthR;
+
+        }
+
+        msWidthHaas(L, R, width, haas){
+            
+            Delay hDelay(samplerate * .02);
+            haasTap = hDelay.read(haas);
+
+            scaleL =  haasTap * .5; 
+            scaleR = R * .5;
+            
+            mid = scaleL + scaleR;
+            side = scaleL - scaleR;
+            
+            w = side * width;
+            invW = w * -1.;
+            
+            widthL = mid + w;
+            widthR = mid + invW;
+
+            hDelay.write(L);
+
+            return widthL, widthR;
+
+        }
+        /* expensive, don't want center attenuated
+        stereoBalance(xL, xR, bal, base){
+            //bal 0 - 1.;
+            //base: 0.25 = 1.5 dB 0.5   = 3 dB 0.75 = 4.5 dB 1 = 6dB (linear)
+            cL = pow((1. - bal), base);
+            cR = pow(bal, base);
+
+            balanceL = xL * cL;
+            balanceR = xR * cR;
+
+            return balanceL, balanceR; 
+
+        }
+        */
+        stereoBalance(xL, xR, bal){
+            //like Ableton Live uility? bal = 0. >>>> 1.
+            bal = bal * 2; //this is b/c all fs balance ranges are already 0. >>>> 1. ***TODO: FIX***
+            cL = 2 - clamp(bal, 1., 2.);
+            cR = clamp(bal, 0., 1.);
+
+            balanceL = xL * cL;
+            balanceR = xR * cR;
+
+            return balanceL, balanceR; 
+
+        }
+        dryWet(dryL, dryR, wetL, wetR, cross){
+
+            invControl = 1. - cross;
+
+            dryL = dryL * invControl;
+            dryR = dryR * invControl;
+
+            wetL = wetL * cross;
+            wetR = wetR * cross;
+
+            outL = dryL + wetL;
+            outR = dryR + wetR;
+
+            return outL, outR;
+
+        }
+        /* unused -- too expensive for this I think
+        dryWetBalanced(dryL, dryR, wetL, wetR, cross){
+            
+            offset = cross + .75;
+            xfade1 = cycle(cross, index="phase");
+            xfade2 = cycle(offset, index="phase");
+
+            dryL = dryL * xfade1;
+            dryR = dryR * xfade1;
+
+            wetL = wetL * xfade2;
+            wetR = wetR * xfade2;
+
+            outL = dryL + wetL;
+            outR = dryR + wetR;
+
+            return outL, outR;
+
+        }
+
+        //pan -- wrong kinda pan for this and too expensive -- using "fake pan" stereo balance
+        stereoXfadeBalanced(L, R, cross){
+            
+            offset = cross + .75;
+            xfade1 = cycle(cross, index="phase");
+            xfade2 = cycle(offset, index="phase");
+
+            LpanL = L * xfade1;
+            LpanR = L * xfade2;
+
+            RpanL = R * xfade1;
+            RpanR = R * xfade2;
+
+            outL = LpanL + RpanL;
+            outR = RpanR + LpanR;
+
+            return outL, outR;
+
+        }
+        */
+        stereoGain(L, R, A){
+
+            gainL = L * A;
+            gainR = R * A;
+
+            return gainL, gainR;
+
+        }
+
+        //All fsfx mixer specific
+        mswh(L, R, width, haas){
+            
+            mswhL = 0;
+            mswhR = 0;
+            
+            if (width >= 0. && haas > 0.){
+                mswhL, mswhR = msWidthHaas(L, R, width, haas);
+            }
+            else if (width >= 0. && haas == 0.){
+                mswhL, mswhR = msWidth(L, R, width);
+            }
+
+            return mswhL, mswhR;
+
+        }
+
+        bal(L, R, bal){
+
+            balanceL = 0;
+            balanceR = 0;
+
+            if (bal > .5 || bal < .5){
+                balanceL, balanceR = stereoBalance(L, R, bal, 1.);
+            }
+            else if (bal == .5){
+                balanceL, balanceR = stereoBypass(L, R);    
+            }
+
+            return balanceL, balanceR;
+        }
+
+        dw(dryL, dryR, wetL, wetR, cross){
+
+            dwL = 0;
+            dwR = 0;
+            
+            if (cross > 0 && cross < 1.){ 
+                dwL, dwR = dryWet(dryL, dryR, wetL, wetR, cross);
+                }
+                else if (cross == 0.){
+                dwL, dwR = stereoBypass(dryL, dryR); 
+                }
+                else if (cross == 1.){
+                dwL, dwR = stereoBypass(wetL, wetR); 
+                }
+
+            return dwL, dwR;
+
+        }
+        /*
+        pan(L, R, cross){
+
+            panL = 0;
+            panR = 0;
+
+            if (cross > .125 || cross < .125){
+                panL, panR = stereoXfadeBalanced(L, R, cross);
+            }
+            else if (cross == .125){
+                panL, panR = stereoBypass(L, R);
+            }  
+
+            return panL, panR;
+
+        }
+        */
+
+        amp(L, R, A){
+            
+            ampL = 0;
+            ampR = 0;
+
+            if (A > 1. || A < 1.){
+                ampL, ampR = stereoGain(L, R, A);
+            }
+            else if (A == 1.){
+                ampL, ampR = stereoBypass(L, R);    
+            }
+
+            return ampL, ampR;
+
+        }
+
+        fxMixer(dryL, dryR, wetL, wetR, width, haas, bal, gain, drywet){
+        
+            fxMidSideL, fxMidSideR = mswh(wetL, wetR, width, haas);
+            fxBalL, fxBalR = bal(fxMidSideL, fxMidSideR, bal);
+            fxGainL, fxGainR = amp(fxBalL, fxBalR, gain);
+            fxDryWetL, fxDryWetR = dw(dryL, dryR, fxGainL, fxGainR, drywet);
+
+            return fxDryWetL, fxDryWetR;
+
+        }
+
+        fxMainOutMixer(dryL, dryR, wetL, wetR, width, haas, bal, gain, drywet){
+        
+            fxMidSideL, fxMidSideR = mswh(wetL, wetR, width, haas);
+            fxBalL, fxBalR = bal(fxMidSideL, fxMidSideR, bal);
+            fxGainL, fxGainR = amp(fxBalL, fxBalR, gain);
+
+            return fxGainL, fxGainR;
+
+        }
+
+/*  //  //  //  //  //  //  //  //  //  //  //
+SATURATORS DIST && TANH APPROX
+*/  //  //  //  //  //  //  //  //  //  //  //
+    tanhRational(x){
+        
+        if( x < -3 ){
+            return -1;
+        }
+        else if( x > 3 ){
+            return 1;
+        }
+        else {
+            return x * ( 27 + x * x ) / ( 27 + 9 * x * x );
+        }
+
+    }
+    tanhL(x){
+	
+        x2 = x * x;
+        
+        a  = (((x2 + 378.) * x2 + 17325.) * x2 + 135135.) * x;
+        b  = ((28. * x2 + 3150.) * x2 + 62370.) * x2 + 135135.;
+        tanhL = a / b;
+        
+        return clamp(tanhL, -1., 1.);
+
+    }
+    tanhFastPD(x){
+        
+        ax = abs(x);
+        x2 = x * x;
+
+        a = x * ( 2.45550750702956 + 2.45550750702956 * ax +
+        ( 0.893229853513558 + 0.821226666969744 * ax ) * x2);
+        b = ( 2.44506634652299 + ( 2.44506634652299 + x2 ) *
+        abs( x + 0.814642734961073 * x * ax ));
+
+        tanhPD = a / b;
+
+        return tanhPD;
+
+    }
+    rectDist(x, d){
+
+        x = x * d;
+        x2 = x * x;
+        x = x / (x2 + .25);
+
+        return x;
+
+    }
+    softDist(x, d){
+
+        x  = x * (d * 2.5);
+        //x2 = x * x;
+        x = x / (abs(x) + 1);
+
+        return x;
+
+    }
+    //cubic NL
+    cNL(x) {
+	
+        //x = x * 10;
+        cnl = dcblock(x * (1 - 0.3333333 * x * x));
+        
+        return cnl;
+
+    }
+    tanhCNL(x) {
+	
+        x = tanhRational(x);
+        x = dcblock(x * (1 - 0.3333333 * x * x));
+        
+        return x;
+
+    }
+    //used in futz
+    teleNL(x, a){
+        //telephone distoriton
+        x2 = x * x;
+        x = ((1 - a) * x) + (a * x2);
+
+        return dcblock(x);
+
+    }
+    //tele distortion croossover
+    crossNL(x, a, xfade){
+        //crossfade between cascade distortions
+        //chained NL
+        xNL = teleNL(x, a);
+        xNL2 = teleNL(xNL, a * .5);
+        xNL2 = teleNL(xNL2, a * .25);
+
+        //xfade stuff
+        xfade = clamp(xfade, 0., .25);
+        offset = xfade + .75;
+        xfade1 = cycle(xfade, index="phase");
+        xfade2 = cycle(offset, index="phase");
+
+        xNL = xNL * xfade1;
+        xNL2 = xNL2 * xfade2;
+        cross = xNL + xNL2;
+
+        return clamp(cross, 0, 1);
+
+    }
+
+/*  //  //  //  //  //  //  //  //  //  //  //
+FILTERS
+*/  //  //  //  //  //  //  //  //  //  //  //
+    /*
+    biquads
+    */
+        //lowshelf coef
+        biquadLS(cf, gain, Q){
+
+            omega = cf * twopi/samplerate;
+            sn = sin(omega);
+            cs = cos(omega);
+            A = sqrt(gain); 
+            beta  = sqrt((A*A + 1.)/Q - (A-1.)*(A-1.));
+            b0 = 1./((A+1.) + (A-1.)*cs + beta*sn);
+
+            a0 = (A * ((A+1.) - (A-1.)*cs + beta*sn)) * b0;
+            a1 = (2. * A * ((A-1) - (A+1)*cs)) * b0;
+            a2 = (A * ((A+1.) - (A-1.)*cs - beta*sn)) * b0;
+            b1 = (-2. * ( (A-1.) + (A+1.)*cs)) * b0;
+            b2 = ((A+1.) + (A-1.)*cs - beta*sn) * b0;
+
+            return a0, a1, a2, b1, b2;
+
+        }
+        //highshelf coef
+        biqaudHS(cf, gain, Q){
+            
+            omega = cf * twopi/samplerate;
+            sn = sin(omega);
+            cs = cos(omega);
+            A = sqrt(gain); 
+            beta  = sqrt((A*A + 1.)/Q - (A-1.)*(A-1.));
+            b0 = 1./((A+1.) - (A-1.)*cs + beta*sn);
+
+            a0 = (A * ((A+1.) + (A-1.)*cs + beta*sn)) * b0;
+            a1 = (-2. * A * ((A-1.) + (A+1.)*cs)) * b0;
+            a2 = (A * ((A+1.) + (A-1.)*cs - beta*sn)) * b0;
+            b1 = (2. * ((A-1.) - (A+1.)*cs)) * b0;
+            b2 = ((A+1.) - (A-1.)*cs - beta*sn) * b0;
+
+            return a0, a1, a2, b1, b2;
+        }
+        //AP coef calc for df2 biquad
+        biquadCoeffAP(cf, Q){
+
+            omega = cf * twopi/samplerate;
+            sn = sin(omega);
+            cs = cos(omega);
+            alpha = sn * 0.5/Q;
+
+            b0 = 1./(1. + alpha);
+            b1 = (-2. * cs) * b0;
+            a1 = b1;
+            a0 = (1. - alpha) * b0;
+            b2 = a0;
+            a2 = 1.0;
+
+            return a0, a1, a2, b1, b2;
+
+        }
+        //direct from 2 biquad
+        biquadDF2(x, a0, a1, a2, b1, b2) {
+
+            History x1(0), x2(0);
+
+            w = x - (x1 * b1) - (x2 * b2);
+
+            y = (w * a0) + (x1 * a1) + (x2 * a2);
+
+            x2 = x1;
+            x1 = w;
+
+            return y;
+        }
+        //stereo biquad
+        stereoBiqaudDF2(inL, inR, a0, a1, a2, b1, b2){
+
+            outL = biquadDF2(inL, a0, a1, a2, b1, b2);
+            outR = biquadDF2(inR, a0, a1, a2, b1, b2);
+
+            return outL, outR;
+
+        }
+        //cascaded biquads for phaseshifter to explosive for our purposes use comb style apPhaseShifter instead
+        phaseShifter8Pole(x, a0, a1, a2, b1, b2){
+
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            
+
+            return x;
+
+        }
+        //12pole version
+        phaseShifter12Pole(x, a0, a1, a2, b1, b2){
+
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+            x = biquadDF2(x, a0, a1, a2, b1, b2);
+
+            return x;
+
+        }
+    /*
+    Combs Allpasses ect
+    */
+        //Stripped down comb for Industry standard effect && comb res
+        combIS(x, delay, fb){
+
+            Delay feedback(samplerate); 
+            fbRead = feedback.read(delay);
+
+            scaledfb = fb * fbRead;
+            combfilter = (x - scaledfb);
+
+            feedback.write(combfilter);
+
+            return fbRead;
+
+        }
+        //Comb with tanh limiting in fb loop
+        combTanh(x, delay, fb){
+	
+            Delay feedback(samplerate * .5); 
+            fbRead = feedback.read(delay);
+            
+            scaledfb = fb * fbRead;
+            combfilter = (x - scaledfb);
+            
+            fbLoop = combfilter;
+            if (fb >= .99 || fb <= -.99){
+                fbLoop = tanhL(fbLoop); 
+                }
+                else {
+                fbLoop = fbLoop;
+            }
+
+            feedback.write(fbLoop);
+            
+            return combfilter;
+
+        }
+        //Two tap Comb with tanh lim fb on first tap
+        combTanh2(x, delay1, delay2, fb){
+	
+            Delay feedback(samplerate * .5); 
+            fbRead1 = feedback.read(delay1);
+            fbRead2 = feedback.read(delay2);
+            
+            scaledfb1 = fb * fbRead1;
+            comb1 = (x - scaledfb1);
+            comb2 = (x - fbRead2);
+            
+            fbLoop = comb1;
+            if (fb >= .99 || fb <= -.99){
+                fbLoop = tanhL(fbLoop); 
+                }
+                else {
+                fbLoop = fbLoop;
+            }
+
+            feedback.write(fbLoop);
+            
+            return comb1, comb2;
+
+        }
+        //ap with fixed delaytime of 8 samps
+        allpass8(x){
+            
+            Delay ff(8);
+            Delay fb(8);
+            
+            ffTap = ff.read(8);
+            fbTap = fb.read(8);
+
+            ap = ffTap + (x - fbTap);
+
+            fb.write(ap);
+            ff.write(x);
+
+            return (ap);
+
+        }
+        //for freq chorus diffusion bank
+        apChorus(x, dt){
+            
+            Delay ff(samplerate * .2);
+            Delay fb(samplerate * .2);
+            
+            ffTap = ff.read(dt);
+            fbTap = fb.read(dt);
+
+            ap = ffTap + (x - fbTap);
+
+            fb.write(ap);
+            ff.write(x);
+
+            return (ap);
+
+        }
+        //ap cascade for freq chorus
+        apChorusBank(x, dt1, dt2, dt3, dt4){
+
+            x = apChorus (x, dt1);
+            x = apChorus (x, dt2);
+            x = apChorus (x, dt3);
+            x = apChorus (x, dt4);
+
+            return x;
+
+        }
+        //for phaseshifter effect max delay = 1/32 of sr
+        apPhaseShifter(x, dt, gain){
+            
+            Delay ff(samplerate * .03125);
+            Delay fb(samplerate * .03125);
+            
+            ffTap = ff.read(dt);
+            fbTap = fb.read(dt);
+
+            ap = ffTap + (x - (fbTap * gain));
+            
+            fb.write(ap);
+            ff.write(x);
+
+            return (ap);
+
+        }
+        //12 pole phaseshifter effect
+        apPSBank8Pole(x, dt, gain){
+
+            x = apPhaseShifter (x, dt, gain);
+            x = apPhaseShifter (x, dt, gain);
+            x = apPhaseShifter (x, dt, gain);
+            x = apPhaseShifter (x, dt, gain);
+            x = apPhaseShifter (x, dt, gain);
+            x = apPhaseShifter (x, dt, gain);
+            x = apPhaseShifter (x, dt, gain);
+            x = apPhaseShifter (x, dt, gain);
+
+            
+            return x;
+
+        }
+        //12 pole phaseshifter effect
+        apPSBank12Pole(x, dt, gain){
+
+            x = apPhaseShifter (x, dt, gain);
+            x = apPhaseShifter (x, dt, gain);
+            x = apPhaseShifter (x, dt, gain);
+            x = apPhaseShifter (x, dt, gain);
+            x = apPhaseShifter (x, dt, gain);
+            x = apPhaseShifter (x, dt, gain);
+            x = apPhaseShifter (x, dt, gain);
+            x = apPhaseShifter (x, dt, gain);
+            x = apPhaseShifter (x, dt, gain);
+            x = apPhaseShifter (x, dt, gain);
+            x = apPhaseShifter (x, dt, gain);
+            x = apPhaseShifter (x, dt, gain);
+            
+            return x;
+
+        }
+        //ap for circular setup
+        allpassCircle(x, dTime, g, fbComp, fbAdd, lp){
+            
+            Delay ff(samplerate * .25);
+            Delay fb(samplerate * .25);
+            
+            ffTap = ff.read(dTime);
+            fbTap = fb.read(dTime);
+
+            y = ffTap + 
+                    (g * 
+                        (x - 
+                            (fbTap * fbComp)));
+            y = mixSmooth(y, lp);
+            
+            fb.write(y + fbAdd);
+            ff.write(x);
+
+            return (y);
+
+        }
+        //4 circle ap
+        apCircle4x  (x0, d0, g0,
+                        x1, d1, //input, delaytime gain
+                            x2, d2,
+                                x3, d3,
+                                    lp){
+
+            History z1(0);
+
+            ap0 = allpassCircle(x0, d0, g0, .5, z1, lp);
+            ap1 = allpassCircle(x1 + ap0, d1, g0 * .25, .5, ap0, lp);
+            ap2 = allpassCircle(x2 + ap1, d2, g0 * .25, .5, ap1, lp);
+            ap3 = allpassCircle(x3 + ap2, d3, g0 * .25, .5, ap2, lp);
+
+            z1 = ap3;
+
+            return ap0, ap1, ap2, ap3;
+
+        }
+        //2x2 fb comb style FDN diffuser in chorus
+        combFDN2x2(x0, dT0, fb0, lp0, //input delaytime feedback damping
+                    x1, dT1, fb1, lp1){
+            
+            //delay lines
+            Delay FDNd0(samplerate * .15); //little over 120ms
+            Delay FDNd1(samplerate * .15);
+
+            //taps at dT-n
+            d0 = FDNd0.read(dT0, interp="linear");
+            d1 = FDNd1.read(dT1, interp="linear");
+
+            //fb scaled at fb-n
+            d0 = d0 * fb0; 
+            d1 = d1 * fb1;
+
+            //damp at d-n with super dumb lp -- no coeffs
+            d0 = mixSmooth(d0, lp0); 
+            d1 = mixSmooth(d1, lp1);
+
+            //hadamard 2x2 diffusion matrix
+            y0 = (d0 + d1) * 0.707107; //fb scaled sqrt(1/2)
+            y1 = (d1 - d0) * 0.707107;
+
+            //write fb loop
+            FDNd0.write(y0 + x0);
+            FDNd1.write(y1 + x1);
+
+            return y0, y1;
+
+        }
+        //4x4 fb comb style FDN diffuser
+        combFDN4x4(x0, dT0, fb0, lp0, //input delaytime feedback damping
+                    x1, dT1, fb1, lp1, 
+                        x2, dT2, fb2, lp2, 
+                            x3, dT3, fb3, lp3){
+            
+            //delay lines
+            Delay FDNd0(samplerate);
+            Delay FDNd1(samplerate);
+            Delay FDNd2(samplerate);
+            Delay FDNd3(samplerate);
+
+            //taps at dT-n
+            d0 = FDNd0.read(dT0, interp="linear");
+            d1 = FDNd1.read(dT1, interp="linear");
+            d2 = FDNd2.read(dT2, interp="linear");
+            d3 = FDNd3.read(dT3, interp="linear");
+
+            //fb scaled at fb-n
+            d0 = d0 * fb0; 
+            d1 = d1 * fb1;
+            d2 = d2 * fb2;
+            d3 = d3 * fb3;
+
+            //damp at d-n with super dumb lp -- no coeffs
+            d0 = mixSmooth(d0, lp0); 
+            d1 = mixSmooth(d1, lp1);
+            d2 = mixSmooth(d2, lp2);
+            d3 = mixSmooth(d3, lp3);
+
+            //hadamard 4x4 diffusion matrix
+            a = d0 + d1; //precalc to cut operations down by 1/3
+            b = d1 - d0;
+            c = d2 + d3;
+            d = d3 - d2;
+
+            y0 = .5 * (a + c);
+            y1= .5 * (b + d);
+            y2 = .5 * (d - b);
+            y3 = .5 * (c - a);
+
+            //write fb loop
+            FDNd0.write(y0 + x0);
+            FDNd1.write(y1 + x1);
+            FDNd2.write(y2 + x2);
+            FDNd3.write(y3 + x3);
+
+            return y0, y1, y2, y3;
+
+        }
+    /*
+    Res Filters
+    */
+        //ds coef calc for lowres
+        resLowCoefDS(fc, r) {
+	
+            //ds coeff
+            History ds(0.0);
+            History a(0);
+            History b(0);
+            History s(0);
+            
+            downSamp = floor(samplerate * 0.00533333333); //256 @ 48k
+            dsCount = wrap((ds + 1), 0, downSamp);
+            ds = dsCount;
+            
+            freqCalc, resCalc = 0;
+            if (dsCount == 0){
+                    freqCalc = cos(((fc * 2)* PI) / samplerate);
+                    resCalc = .882497 * (exp(r * .125));
+                    b = (resCalc * resCalc);
+                    a = -2 * (freqCalc * resCalc);
+                    s = (a + b) + 1;
+                }
+                else {
+                    a = a;
+                    b = b;
+                    s = s;
+            }
+
+            return a, b, s;
+        }
+        //non linear
+        resLowDirty(x, a, b, s){
+            
+            History y1(0);
+            History y2(0);
+            
+            //Filter
+            aFB = a * y1;
+            bFB = b * y2;
+            fbSum = aFB + bFB;
+            x = x * s;
+            y = x - fbSum;
+            
+            y2 = tanhCNL(y1);
+            y1 = tanhCNL(y);
+            
+            return y;
+        }
+        //resLow coefficient calc
+        resLowCoef(fc, r){
+            
+            freqCalc = cos((( fc * 2 ) * PI) / samplerate);
+            resLim = clamp(r, 0., .99999);
+            resCalc = .882497 * (exp(resLim * .125));
+            b = (resCalc * resCalc);
+            a = -2 * (freqCalc * resCalc);
+            s = (a + b) + 1;
+
+            return a, b, s;
+
+        }
+        //precalc coef
+        resLowpassPC(x, a, b, s){
+
+            History y1(0);
+            History y2(0);
+            /*
+            //coefficient calc
+            freqCalc = cos(((freq*2)*PI)/samplerate);
+            resLim = clamp(res, 0., .99999);
+            resCalc = .882497*(exp(resLim*.125));
+            b = (resCalc * resCalc);
+            a = -2*(freqCalc * resCalc);
+            inputScaling = (a+b)+1;
+            */
+            //Filter
+            aFB = a * y1;
+            bFB = b * y2;
+            fbSum = aFB + bFB;
+            scaled = x * s;
+            filteredSignal = scaled - fbSum;
+            y2 = y1;
+            y1 = filteredSignal;
+            
+            return filteredSignal;
+
+        }
+
+    /*
+    Onepole filters && variants
+    */
+        //for stutter
+        onepoleXfadeStutter(signal, xfade){
+            //precalc coeff fc = 1.5k(ish) @ a = .19609
+            History y0(0);
+            
+            //calc coefficient
+            //a = clamp((abs(freq)*sin(2*PI/samplerate)), 0, 1);
+            //fiter
+            lp = mix(y0, signal, .19509);
+            y0 = lp;
+            hp = signal - lp;
+            
+            //xfade stuff
+            xfade = clamp(xfade, 0., .25);
+            offset = xfade + .75;
+            xfade1 = cycle(xfade, index="phase");
+            xfade2 = cycle(offset, index="phase");
+            lpCross = lp * xfade1;
+            hpCross = hp * xfade2;
+            crossover = lpCross + hpCross;
+            
+            
+            return crossover;
+        }
+        //xfade-able hp lp
+        onepoleXfade(signal, xfade, fc){
+            
+            History y0(0);
+            
+            //calc coefficient
+            a = clamp((abs(fc)*sin(2*PI/samplerate)), 0, 1);
+            //fiter
+            lp = mix(y0, signal, a);
+            y0 = lp;
+            hp = signal - lp;
+            
+            //xfade stuff
+            xfade = clamp(xfade, 0., .25);
+            offset = xfade + .75;
+            xfade1 = cycle(xfade, index="phase");
+            xfade2 = cycle(offset, index="phase");
+            lpCross = lp * xfade1;
+            hpCross = hp * xfade2;
+            crossover = lpCross + hpCross;
+            
+            
+            return crossover;
+        }
+        //onepole highpass @ 1k
+        onepoleHP1k(x){
+	
+            History y0(0);
+            
+            //calc coefficient
+            //a = clamp((abs(opRange)*sin(2*PI/samplerate)), 0, 1);
+            //fiter
+            lp = mix(y0, x, .003);
+            y0 = lp;
+            hp = x - lp;
+            
+            return hp;
+
+        }
+    /*
+    svf 
+    */
+        //coeff calc for svfZdf ds @ 256
+        svfZdfCoeff(fc, Q){
+            //History ds(0.0);
+            History f(0);
+            History r(0);
+            History g(0);
+            
+            cf = 0;
+            cr = 0;
+            cg =0;
+            //calc coeff 
+            if (change(fc) || change(Q)){
+                    cf = tan(PI*fc / samplerate);
+                    cr = f + 1 / Q;
+                    cg = 1 / (f * r + 1);
+                    f = cf;
+                    r = cr;
+                    g = cg;
+                }
+                else{
+                    f = f;
+                    r = r;
+                    g = g;
+            }
+
+            return f, r, g;
+
+        }
+        //linear
+        svfZdfL(x, f, r, g){
+            //linear Filter
+            /*coeff calc 
+            f = tan(PI*fc / samplerate);
+            r = f + 1 / Q;
+            g = 1 / (f * r + 1);
+            */
+
+            History z1(0);
+            History z2(0);
+
+            // calculate outputs
+            hp = (x - r * z1 - z2) * g;
+            bp = z1 + f * hp;
+            lp = z2 + f * bp;
+            //ap = lp - (bp * (1.0 - (r))) + hp;
+
+            //update state
+            z1 += (2 * f * hp);
+            z2 += (2 * f * bp);
+
+            return lp, bp, hp;
+
+        }
+        //non linear
+        svfZdfNL(x, f, r, g){
+            //Non linear filter now using updated topology that doesn't constantly blow =p
+            /*coeff calc 
+            f = tan(PI*fc / samplerate);
+            r = f + 1 / Q;
+            g = 1 / (f * r + 1);
+            */
+
+            History z1(0);
+            History z2(0);
+
+            //input distortion
+            x = cNL(x * 1.3);
+            //x = clamp(x, -1, 1);                      //trying to lighten the cpu...
+            //x = tanhFastPD(x);                        //trying to lighten the cpu...
+
+            // calculate outputs
+            //hp = tanhFastPD((x - (z2 + z1 * r)) * g); //again to cpu heavy
+            hp = (x - (z2 + z1 * r)) * g;
+            x1 = hp * f;
+            bp = tanhFastPD(x1 + z1);                 //bp is best place to but nonlinearity it seems
+            x2 = bp * f;
+            lp = (x2 + z2);
+            //ap = lp - (bp * (1.0 - (r))) + hp;
+
+            //update state
+            z1 += (2 * x1);
+            z2 += (2 * x2);
+
+            return lp, bp, hp;
+
+        }
+        //linear SVF stereo xfade
+        svfZdfL4Pole(xL, xR, fc, Q, xfade, poles){
+            //calc coeff 
+            f, r, g = svfZdfCoeff(fc, Q);
+
+            //calc xfade
+            xfade1, xfade2, xfade3 = cubeXfade(xfade);
+            
+            //2 pole stereo filter
+            lp2L, bp2L, hp2L = svfZdfL(xL, f, r, g);
+            lp2R, bp2R, hp2R = svfZdfL(xL, f, r, g);
+            //2 pole xfade
+            y2PL = (xfade1 * lp2L) + (xfade2 * bp2L) + (xfade3 * hp2L);
+            y2PR = (xfade1 * lp2R) + (xfade2 * bp2R) + (xfade3 * hp2R);
+            
+            //4pole filter
+            lp4L, bp4L, hp4L = svfZdfL(y2PL, f, r, g);
+            lp4R, bp4R, hp4R = svfZdfL(y2PR, f, r, g);
+            //4 pole xfade
+            y4PL = (xfade1 * lp4L) + (xfade2 * bp4L) + (xfade3 * hp4L);
+            y4PR = (xfade1 * lp4R) + (xfade2 * bp4R) + (xfade3 * hp4R);
+
+            //crossfade between poles
+            yL = mix(y2PL, y4PL, poles);
+            yR = mix(y2PR, y4PR, poles); 
+
+            return yL, yR;
+            
+        }
+        //non linear stereo xfade
+        svfZdfNL4Pole(xL, xR, fc, Q, xfade, poles, drive){
+            //gain should not exceed 3x w/o upsampling filter will explode at lower fs
+            //calc coeff 
+            f, r, g = svfZdfCoeff(fc, Q);
+            //calc xfade
+            xfade1, xfade2, xfade3 = cubeXfade(xfade);
+            
+            //hard limit input to avoid blow ups
+            xL = clamp(xL, -1., 1.);
+            xR = clamp(xR, -1., 1.);
+
+            //drive input
+            xL = xL * drive;
+            xR = xR * drive;
+            
+            //2 pole stereo filter
+            lp2L, bp2L, hp2L = svfZdfNL(xL, f, r, g);
+            lp2R, bp2R, hp2R = svfZdfNL(xR, f, r, g);
+            //2 pole xfade
+            y2PL = (xfade1 * lp2L) + (xfade2 * bp2L) + (xfade3 * hp2L);
+            y2PR = (xfade1 * lp2R) + (xfade2 * bp2R) + (xfade3 * hp2R);
+            
+            //4pole filter
+            lp4L, bp4L, hp4L = svfZdfNL(y2PL, f, r, g);
+            lp4R, bp4R, hp4R = svfZdfNL(y2PR, f, r, g);
+            //4 pole xfade
+            y4PL = (xfade1 * lp4L) + (xfade2 * bp4L) + (xfade3 * hp4L);
+            y4PR = (xfade1 * lp4R) + (xfade2 * bp4R) + (xfade3 * hp4R);
+
+            //crossfade between poles
+            yL = mix(y2PL, y4PL, poles);
+            yR = mix(y2PR, y4PR, poles); 
+            
+            //output saturation
+            yL = 2 * (tanhFastPD(yL * .5));
+            yR =  2 * (tanhFastPD(yR * .5));
+
+            return dcblock(yL), dcblock(yR);
+            
+        }
+    /*
+    tele filter
+    */
+        teleAP(x){
+            //Pre-Telephone comb/ap filter
+            Delay ff(11);
+            ffTap = ff.read(11);
+
+            xA = x * .9;
+            y = xA - ffTap;
+            
+            xB = x * .75;
+            ff.write(xB); 
+
+            return x;
+
+        }
+        teleOnepoleHP(signal, a){
+            //with precal coef
+            History y0(0);
+            
+            //calc coefficient
+            //a = clamp((abs(freq)*sin(2*PI/samplerate)), 0, 1);
+            //fiter
+            lp = mix(y0, signal, a);
+            y0 = lp;
+            hp = signal - lp;
+
+            return hp;
+        }
+
+        TeleOnepoleLP(signal, a){
+            //with precalc coef
+            History y0(0);
+            
+            //calc coefficient
+            //a = clamp((abs(freq)*sin(2*PI/samplerate)), 0, 1);
+            //fiter
+            lp = mix(y0, signal, a);
+            y0 = lp;
+            
+            return lp;
+        }
+
+        lp4x(x, f){
+            //cascade
+            x = TeleOnepoleLP(x, f);
+            x = TeleOnepoleLP(x, f);
+            x = TeleOnepoleLP(x, f);
+            x = TeleOnepoleLP(x, f);
+            
+            return x;
+
+        }
+
+        hp4x(x, f){
+            //cascade
+            x = teleOnepoleHP(x, f);
+            x = teleOnepoleHP(x, f);
+            x = teleOnepoleHP(x, f);
+            x = teleOnepoleHP(x, f);
+
+            return x;
+
+        }
+
+        teleBP(x){
+            //cascade to make BP HP cutoff = 400 LP Cutoff = 3500
+            x = hp4x(x, .05696);
+            x = lp4x(x, .456694);
+
+            return x;
+
+        }
+        
+        teleFilter(x, a){
+            //Basic with no xfade
+            x = teleAP(x);
+            x = teleNL(x, a);
+            x = teleBP(x);
+
+            return x;
+
+        }
+        //this is used in futz
+        teleFilterXfade(x, a, xfade, nLevel, acP, acG){
+            //xfadable version 
+            x = teleAP(x);
+            x = (cycle(acP) * acG) + x;
+            x = (nLevel * teleNoise()) + x;
+            x = crossNL(x, a, xfade);
+            x = teleBP(x);
+            
+            return x;
+
+        }
+    
+/*  //  //  //  //  //  //  //  //  //  //  //
+ARO
+*/  //  //  //  //  //  //  //  //  //  //  //
+    tanhSquare(freq, bright, duty){
+        
+        dutyScale = 1. / duty;
+        freqAbs = abs(freq);
+        
+        freqCalc = clamp((samplerate * .25) / (freqAbs * log10(freqAbs)) * (pi*.5), 0., 28.);
+        dutyCalc = freqCalc / dutyScale;
+
+        phase = phasor(freq, 0);
+        offset = clamp(phase * dutyScale, 0., 1.);
+        osc = cycle(offset, index="phase");
+        damp = osc * bright;
+
+        tS = tanhRational(damp * dutyCalc);
+
+        return tS;
+
+    }
+
+    tanhSaw(freq, bright, sawness){
+        dutyScale = .5;
+        freqAbs = abs(freq);
+        
+        freqCalc = clamp((samplerate * .25) / (freqAbs *log10(freqAbs)) * (pi * .5), 0., 28.);
+        dutyCalc = freqCalc / dutyScale;
+
+        phase = phasor(freq, 0);
+        offset = clamp(phase * dutyScale, 0., 1.);
+        osc = cycle(offset, index="phase");
+        sawOsc = cycle((offset + scale(sawness, 0., 1., -.25, .25)), index="phase");
+        damp = osc * bright;
+
+        tSq = tanhRational(damp * dutyCalc);
+        tSa = tSq * sawOsc;
+
+        return tSa;
+
+    }
+
+    tanhARO(freq, b, d, sel){
+
+        y = 0;
+        if (sel == 0){
+                y = tanhSquare(freq, b, d);
+            }
+            else if (sel == 1){
+                y = tanhSaw(freq, b, d);
+            }
+            else{
+                y = 0;
+        }
+
+        return y;
+
+    }
+    
+    //lp noise for futz
+    teleNoise(){
+
+        x =  TeleOnepoleLP(noise(), .144251);
+
+        return x;
+
+    }
+
+/*  //  //  //  //  //  //  //  //  //  //  //
+LFO
+*/  //  //  //  //  //  //  //  //  //  //  //
+    //for adding random wandering jitter to control sigs
+    jitterModLFO(speed, low, high){
+        //speed slow = .00000000006 fast = .00000006
+        History y1(0);
+        History y2(0);
+        
+        //Filter
+        a = -2 * y1;
+        fbSum = a + y2;  
+        x = (noise() * speed) - fbSum;
+        
+        y2 = y1;
+        y1 = x;
+
+        range = fold(x, low, high);
+        
+        return range;
+
+    }
+    //simple calc sinus
+    calcSin(phase){
+        cs = sin((pi*(phase * 2 -1)));
+        
+        return cs;
+    }
+    //simple calc tri
+    calcTri(phase){
+        ct = fold((phase * 4 -2), -1., 1.);
+        
+        return ct;
+    }
+    //third order hermite polynomial
+    hRandLFO(p){
+        //takes phase input 0 >> 1
+        //for rand cascade
+        History e2(0);
+        History e1(0);
+        History e0(0);
+
+
+        //signed inverted phasor input
+        pS = (1- p) -.5;
+
+        //cascade of rand previuos inputs
+        y3 = sah(noise(), pS, 0);
+        y2 = sah(e2, pS, 0);
+        y1 = sah(e1, pS, 0);
+        y0 = sah(e0, pS, 0);
+
+        e2 = y3;
+        e1 = y2;
+        e0 = y1;
+
+        //calc coeffs
+        c0 = y1;
+        c1 = (y2 - y0) * .5;
+
+        c2 = y0 - (y1 * 2.5);
+        c2 = c2 + (y2 * 2);
+        c2 = c2 - (y3 * .5);
+
+        c3 = ((y1 - y2) * 1.5) + ((y3 - y0) * .5);
+
+        //do polynomial
+        //hPoly = (((((c3 * p) + c2) * p) + c1) * p) + c0;
+
+        hPoly = c3 * p;
+        hPoly = hPoly + c2;
+        hPoly = hPoly * p;
+        hPoly = hPoly + c1;
+        hPoly = hPoly * p;
+        hPoly = hPoly + c0;
+
+        return hPoly;
+
+    }
+    //like rand~
+    randT(phase){
+        
+        History z1(0);
+
+        reset = (delta(phase) < 0);
+        noiseGate = latch(noise(), reset);
+        z1Gate = latch(z1, reset);
+        randGate = mix(z1Gate, noiseGate, phase);
+            
+        z1 = randGate;
+            
+        return randGate;
+        
+    }
+    //swoopy tanhy rand~
+    randomRound(phase){
+        History prev(0);
+
+        reset = (delta(phase) < 0);
+        noiseGate = latch(noise(), reset);
+        prevGate = latch(prev, reset);
+        randGate = mix(prevGate, noiseGate, phase);
+        roundT = tanhRational(randGate * 3);
+        
+        fix = fixdenorm(noiseGate);
+        prev = fix;
+        
+        return roundT;
+        
+    }
+    //soft edged square lfo
+    tanhSquareLFO(phase, duty){
+        //phase 0 >> 1 
+        d = 1 / duty;
+        s = 2.5 - (1 - duty);
+        p = clamp((phase * d), 0, 1);
+        //osc routine
+        sinOsc = (cycle(p, index="phase") * s) * d;
+        tanhOsc = tanhRational(sinOsc);
+
+        return tanhOsc;
+
+    }
+    //the lfo function needs to be driven by phase accum
+    fsLFO(phzr, waveSel, duty){
+        
+        lfo = 0;
+
+        if (waveSel == 0){
+                lfo = calcSin(phzr);
+            }
+            else if (waveSel == 1){
+                lfo = calcTri(phzr);
+            }
+            else if (waveSel == 2){
+                lfo = tanhSquareLFO(phzr, duty);
+            }
+            else if (waveSel == 3){
+                lfo = hRandLFO(phzr);
+            }
+            else if (waveSel == 4){
+                lfo = randomRound(phzr);
+            }
+            else if (waveSel == 5){
+                lfo = randT(phzr);
+            }
+            else{
+                lfo = 0;
+        }
+
+        return lfo;
+
+    }
+    //2nd branch so gen~ doesn't get confused and cross the history's wires when called for offset =p
+    fsLFO2(phzr, waveSel, duty){
+        
+        lfo = 0;
+
+        if (waveSel == 0){
+                lfo = calcSin(phzr);
+            }
+            else if (waveSel == 1){
+                lfo = calcTri(phzr);
+            }
+            else if (waveSel == 2){
+                lfo = tanhSquareLFO(phzr, duty);
+            }
+            else if (waveSel == 3){
+                lfo = hRandLFO(phzr);
+            }
+            else if (waveSel == 4){
+                lfo = randomRound(phzr);
+            }
+            else if (waveSel == 5){
+                lfo = randT(phzr);
+            }
+            else{
+                lfo = 0;
+        }
+
+        return lfo;
+
+    }
+    //3rd branch so gen~ doesn't get confused and cross the history's wires when called for offset =p
+    fsLFO3(phzr, waveSel, duty){
+        
+        lfo = 0;
+
+        if (waveSel == 0){
+                lfo = calcSin(phzr);
+            }
+            else if (waveSel == 1){
+                lfo = calcTri(phzr);
+            }
+            else if (waveSel == 2){
+                lfo = tanhSquareLFO(phzr, duty);
+            }
+            else if (waveSel == 3){
+                lfo = hRandLFO(phzr);
+            }
+            else if (waveSel == 4){
+                lfo = randomRound(phzr);
+            }
+            else if (waveSel == 5){
+                lfo = randT(phzr);
+            }
+            else{
+                lfo = 0;
+        }
+
+        return lfo;
+
+    }
+    //4th branch so gen~ doesn't get confused and cross the history's wires when called for offset =p
+    fsLFO4(phzr, waveSel, duty){
+        
+        lfo = 0;
+
+        if (waveSel == 0){
+                lfo = calcSin(phzr);
+            }
+            else if (waveSel == 1){
+                lfo = calcTri(phzr);
+            }
+            else if (waveSel == 2){
+                lfo = tanhSquareLFO(phzr, duty);
+            }
+            else if (waveSel == 3){
+                lfo = hRandLFO(phzr);
+            }
+            else if (waveSel == 4){
+                lfo = randomRound(phzr);
+            }
+            else if (waveSel == 5){
+                lfo = randT(phzr);
+            }
+            else{
+                lfo = 0;
+        }
+
+        return lfo;
+
+    }
+/*  //  //  //  //  //  //  //  //  //  //  //
+FX
+*/  //  //  //  //  //  //  //  //  //  //  //
+        //basic RM for AM/tremelo
+        basicRM(x, modSig){
+
+            History z1(0.0);
+    
+            mod = (x * modSig);
+            mod = mod - (z1 * 0.66666666666667);
+            z1 = mod;
+            mod = dcblock(mod);
+
+            return mod;
+        }
+        //balanced modulation
+        balRM(x, modSig){
+
+            //History z1(0.0);
+            
+            mod = (x * modSig) + ((x * -1) * (x * -1));
+            //mod = mod - (z1 * 0.66666666666667);
+            //z1 = mod;
+            mod = mod * 2; //gain compensation
+            mod = dcblock(mod);
+
+            return mod;
+        }
+        //delay based freq shifter
+        freqshiftDelay (signal, pitch){
+            Delay freqshift(samplerate);
+
+            //phase accum for delay
+            p = phasor(pitch, 0);
+            pOff = ((p + .5) % 1.);
+
+            fsP1 = mstosamps(p * 100.);
+            fsP2 = mstosamps(pOff *100);
+
+            //delay
+            fsTap1 = freqshift.read(fsP1);
+            fsTap2 = freqshift.read(fsP2);
+
+            //envelope
+            fsEnv1 =   (fsTap1 * (.5 + (-.5 * cycle(p, index="phase"))));
+            fsEnv2 =   (fsTap2 * (.5 + (-.5 * cycle(pOff, index="phase"))));
+
+            fs = fsEnv1 + fsEnv2;
+
+            freqshift.write(signal);
+
+            return fs;
+
+        }
+        //delay based pitch shifter
+        pitchShift(x, pitch){
+            Delay pitchShift(samplerate);
+
+            //phase accum for delay
+            p = phasor(pitch, 0);
+            pOff = ((p + .5) % 1.);
+
+            pSP1 = mstosamps(p * 100.);
+            pSP2 = mstosamps(pOff *100);
+
+            //delay
+            pSTap1 = pitchShift.read(pSP1);
+            pSTap2 = pitchShift.read(pSP2);
+
+            //envelope
+            pSEnv1 =   (pSTap1 * (.5 + (-.5 * cycle(p, index="phase"))));
+            pSEnv2 =   (pSTap2 * (.5 + (-.5 * cycle(pOff, index="phase"))));
+
+            pS = pSEnv1 + pSEnv2;
+
+            pitchShift.write(x);
+
+            return pS;
+
+        }
+/*  //  //  //  //  //  //  //  //  //  //  //
+OTHER
+*/  //  //  //  //  //  //  //  //  //  //  //
+        //faster exp
+        expA(x){
+	
+            x = 0.999996 + (0.031261316 + (0.00048274797 + 0.000006 * x) * x) * x;
+            x *= x; x *= x; x *= x; x *= x; x *= x;
+            
+            return x;
+
+        }
+        
+        curve(target, dur, slope){
+            // value: current, from, to, range:
+            History v, v0, v1, vrange; 
+            // samples elapsed, samples remaining:
+            History samplecount, samplesleft;
+            // cached values to speed up per-sample loop:
+            History div_durp, div_erp;
+
+            // mystery magic numbers
+            RFACTOR, PFACTOR = 4.347826, 5;
+            DIV_RFACTOR = 0.013104;
+
+            // calculated only when a new target is set:
+            if (change(target)) {
+                if (slope == -1 || slope == 1) {
+                    v1, samplesleft = target, 0; // immediate step, no curving
+                } 
+                else {
+                    // starting a new ramp:
+                    samplecount = 0.;	
+                    // duration in samples:
+                    samplesleft = mstosamps(dur);		
+                    // ramp start & end values:
+                    v0, v1 = v, target;
+                    // ramp range:
+                    vrange = v1 - v0;
+                    // nonlinear mapping of -1 to 1 curve factor
+                    f = (1 - abs(slope));
+                    p = (slope >= 0. ? 1 : -1) * PFACTOR * (expA( f * RFACTOR) - 1.) * DIV_RFACTOR;
+                    // bypass really sharp curves:
+                    p = fixdenorm(p); 
+                    // cached factors for the per-sample curve calculation
+                    div_erp = 1. / (expA(1 / p) - 1.);
+                    div_durp = 1 / (samplesleft * p);
+                }
+            }
+
+            y = 0;
+            // per sample calculation:
+            if (samplesleft > 0.5) {
+                    // still ramping
+                    y = v;
+                    // compute next ramp sample:
+                    samplecount += 1; 
+                    samplesleft -= 1;
+                    // compute curvature
+                    curv = (expA(samplecount * div_durp) - 1) * div_erp; 
+                    // scale to the output range & integrate:
+                    v += (v0 - v) + (curv * vrange);
+                } 
+                else {
+                    // no longer ramping:
+                    v = v1;
+                    y = v;
+            }
+
+            flag = y != 0;
+
+            return y, flag;
+
+        }
+
+        line(target){
+            // value: current, from, to, range:
+            History v, v0, v1, vrange; 
+            // samples elapsed, samples remaining:
+            History samplecount, samplesleft;
+
+            History div_durp;
+            //Param target();
+            Param dur(min=0);
+
+            // calculated only when a new target is set:
+            if (change(target)) {
+                // starting a new ramp:
+                samplecount = 0.;	
+                // duration in samples:
+                samplesleft = mstosamps(dur);		
+                // ramp start & end values:
+                v0, v1 = v, target;
+                // ramp range:
+                vrange = v1 - v0;
+
+                div_durp = 1 / samplesleft;
+                
+            }
+
+            y = 0;
+            // per sample calculation:
+            if (samplesleft > 0.5) {
+                    // still ramping
+                    y = v;
+                    // compute next ramp sample:
+                    samplecount += 1; 
+                    samplesleft -= 1;
+                    line = samplecount * div_durp;
+                    // scale to the output range & integrate:
+                    v += (v0 - v) + (line * vrange);
+                } 
+                else {
+                    // no longer ramping:
+                    v = v1;
+                    y = v;
+            }
+
+            return y;
+
+        }
+        //hann window
+        hannWin(x){ 
+
+            x = .5 * (1-  cos(pi * 2 * x));
+            return x;
+
+        }
+        //tukey window
+        tukeyWin(x, s){ 
+            return (x < 0.5 / s) 
+                        * 0.5 
+                            * (1 - cos (PI * 2 * s * x)) 
+                                + ((1 - x) < 0.5 / s) 
+                                    * 0.5 
+                                        * (1 - cos(PI * 2 * s * (1 - x))) 
+                                            + ((1 - x) > 0.5 / s && x > 0.5 / s);
+        }
+        //for output dectection
+        aCheckStereo(xL, xR, t, a){
+            //a = .000001 -120db, t = .95  
+            aCheck =  abs(xL + xR);
+            aCheck = mixSmooth(aCheck, t);
+            aCheck = aCheck > a;
+
+            return aCheck;
+
+        }
+        //sort of check for prime **TODO: FIX** add while loop
+        primeApprox(n){
+
+            //false = 0;
+            //true = 1;
+            
+            p = 1;
+            
+            if (n <= 2){
+                    p = 0;
+                }
+            else if (n == 3){
+                p = 1;
+                }
+            else if (n % 2 == 0 || n %  3 == 0){
+                p = 0;
+            }
+            else {
+                p = 1;
+            }
+            
+            return p;
+            
+        }
+        //returns a random number between range once
+        randNum(lo, hi){
+
+            History flag(1);
+            n = 0;
+            
+            if (flag == 1){
+                    n = (noise() * 234561256742);
+                    n = wrap(n, lo, hi);
+					n = floor(n);
+                    
+                    flag = 0;
+                }
+
+            p = latch(n, n);
+            return p;
+
+        }
+        //sort of returns a random prime-ish number **NEED TO FIX**
+        randPrime(lo, hi){
+            
+            History n(0);
+
+            n = randNum(lo, hi);;
+            pt = primeApprox(n);
+
+            if (pt == 0){
+                    n = n + 1;
+                }
+                else {
+                    n = n;
+
+                }   
+
+            return n;
+
+        }
+///////////////////////////////////////////////

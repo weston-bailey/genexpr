@@ -1,0 +1,89 @@
+/*	//	//	//	//	//	//	//	//
+DECLARATIONS
+*/	//	//	//	//	//	//	//	//
+
+//for the phase accum
+History	phaseAccum(0);
+//for the reset branch
+History	clear(1);		
+//declare the buffer
+Data circleDelay(samplerate, 2);			
+//delaytime Param in Samples (this should be smoothed)
+Param delayTime(11025, min=0);		
+
+/*	//	//	//	//	//	//	//	//
+'DEMI-DECLARATIONS' -- DON'T HAVE TO BE HERE BUT IT HELPS
+*/	//	//	//	//	//	//	//	//
+
+//figure out the delay buffer size
+buffSize = dim(circleDelay);
+//phase Accumulator in Samples for writing to buffer
+writePhase	= wrap((phaseAccum + 1), 0, buffSize);
+phaseAccum = writePhase;
+
+//Alternative phase accum with counter with signed phasor
+/*
+writePhase, carryFlag, carryCount = counter(1, 0, buffSize);
+writePhaseSigned = writePhase / buffSize;
+*/
+
+//phase wrapper for reading
+readPhase = wrap((writePhase - delayTime), 0, buffSize);
+//readPhaseSigned = readPhase / buffSize;
+
+//Alternative reversable read phasor need Param direction; declared
+/*
+readPhase = 0;
+
+if (direction == 0){
+        readPhase = wrap((writePhase - delayTime), 0, buffSize);
+    }
+    else if (direction == 1){
+        writePhaseB = dSize - writePhase;
+        readPhase = wrap((writePhaseB - delayTime), 0, buffSize);
+    }
+*/
+
+//inputs
+inL = in1;
+inR = in2;
+
+/*	//	//	//	//	//	//	//	//
+ROUTINE FOR CLEARING BUFFER
+*/	//	//	//	//	//	//	//	//
+
+if (clear) {
+	
+	for(i = 0; i < buffSize; i += 1) {
+		
+		poke(circleDelay, 0, i, 0, 0, index="samples");
+		poke(circleDelay, 0, i, 1, 0, index="samples");
+	
+	}
+
+	clear = 0;	
+
+}
+
+
+/*	//	//	//	//	//	//	//	//
+BUFFER OPERATIONS
+*/	//	//	//	//	//	//	//	//
+
+// write to buffer
+poke(circleDelay, inL, writePhase,	0, 0, index="samples");
+poke(circleDelay, inR, writePhase,	1, 0, index="samples");
+
+// read from buffer
+outL = sample(circleDelay, readPhase, 0, index="samples", interp="cubic");
+outR = sample(circleDelay, readPhase, 1, index="samples", interp="cubic");
+												//^^can remove index to use 0 >> 1 phasor for speed changes with rate
+														//^^ "cubic" interp, but step is good if using FB
+
+
+/*	//	//	//	//	//	//	//	//
+OUTPUT
+*/	//	//	//	//	//	//	//	//
+
+out1	= outL;
+out2	= outR;

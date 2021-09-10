@@ -1,0 +1,44 @@
+require ("fsDSPLibrary.genexpr");
+
+History outFlag(0.0);
+
+Param envFlag(0.0, min=0., max=1);
+
+//for fx mixer
+Param width(1, min=0.0, max=2.0);
+Param haas(0.0, min=0.0, max=20.0);
+Param bal(0.5, min=0.0, max=1.0);
+Param gain(1);
+Param drywet(0.5, min=0.0, max=1.0);
+
+//fx Params
+Param pGtime(1, min=0, max=samplerate);
+Param fb(0, min=-1, max=1);		
+//gSize should be even
+Param gSize(2000, min=4); //not smoothed b/c latch
+
+dryL = in1;
+dryR = in2;
+
+inFlag = dryL || dryR;
+
+//effect
+yL = 0;
+yR = 0;
+flag = 0;
+if (inFlag == 1 || outFlag == 1){
+		yL, yR, flag = shortTimeReversal(dryL, dryR, envFlag=envFlag,
+												pGtime=pGtime, fb=fb, gSize=gSize,
+													width=width, haas=haas, bal=bal, gain=gain, drywet=drywet);
+    }
+    else{
+        yL = 0;
+        yR = 0;
+        flag = 0;
+}
+
+outFlag = flag;
+
+out1 = yL;
+out2 = yR;
+

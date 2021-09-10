@@ -1,0 +1,64 @@
+//simple calculated sine
+sineFB(phase, fb){
+    
+    //acc = phasor(freq, 0);
+    //add fb before calc 
+    acc = (phase * 2 - 1) + fb;
+    //acc = cycle(phase, index="phase");
+    //acc = acc + fb;
+    cs = sin(acc * pi);
+    
+    return cs;
+}
+
+mixSmooth(x, s){
+    //smooth out parameter
+    History fb(0);
+    smooth = mix(x, fb, s);
+
+    fb = smooth;
+
+    return smooth;
+
+}
+
+sawFB(phase, freq){
+    //phase is the phase accum and freq is use for bandlimitingand should be positive
+    History fbLoop(0);
+
+    Param feedback(1, min=-1., max=1);
+    normFreq = freq / samplerate;
+
+    //self osc damping
+    //fb = 54 * pow(0.5 - normFreq, 6);
+    fb = 13 * pow(0.5 - normFreq, 4); //alt
+    fb = (fb * feedback) * fbLoop;
+
+    osc = sineFB(phase, fb);
+    //average
+    osc = mix(osc, fbLoop, 0.5);
+    fbLoop = osc; //write feedback
+    //HF shelf
+    osc = (osc * 2.5) - (fbLoop * 1.5);
+    //frequency-dependent amplitude compensation
+    osc = osc * (1 - (normFreq * 2));
+
+    return osc;
+}
+
+Param fbUp(0, min=-1., max=1);
+Param fbDown(0, min=-1., max=1);
+Param warb(0., min=-10, max=10);
+Param duty(0., min=0., max=1.);
+Param upAmp (.5, min=0., max=.5);
+Param downAmp (.5, min=0., max=.5);
+freq = in1;
+
+phase = phasor(freq, 0);
+revPhase = phasor((freq + warb) * -1., 0);
+revPhase = (revPhase - duty) % 1.;
+
+upSaw = sawFB(phase, freq, feedback=fbUp);
+downSaw = sawFB(revPhase, freq, feedback=fbDown);
+
+out1 = (upSaw * upAmp) + (downSaw * downAmp); 

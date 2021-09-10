@@ -1,0 +1,98 @@
+
+// we build our own delay line so that we can clear it (delayClear)
+// with a for-loop on request
+
+
+//	//	//	STUPID LOCAL FUNCTIONS	(ignore)
+
+// approx exp(x) (more accurate than 'fastexp()')
+expA(x0)
+{
+	x = 0.999996 + (0.031261316 + (0.00048274797 + 0.000006 * x0) * x0) * x0;
+	x *= x; x *= x; x *= x; x *= x; x *= x;
+	return x;
+}
+
+tauA(t)								// approximate 'exp(-1 / (seconds * samplerate))'
+{
+	y = expA(-1 / (t * samplerate));
+	return y + 0.000128;			// approximation has excellent accuracy above...
+}									// ...0.01 seconds (10 milliseconds) input
+
+expsmooth(x, t)		// x = value	// t is smooth time in seconds
+{
+	History w(0);
+	z = tauA(t);
+	y = (z * w) + (x * (1 - z));
+	w = y;
+	return y;
+}
+
+
+//	//	//	DECLARE
+
+// demo delay line
+
+History	demoDelayPhase(0);
+Data	demoDelay(samplerate, 2);			// stereo for this demo
+
+// demo delay params
+
+History	delayClear(1);						// init demo delay buffer (1)
+Param	demodelaytime(11025, min=0);		// in samples
+
+// fixed param (ignore)
+
+Param	smooth(20, min=1, max=1000);		// ms
+
+
+//	//	//	INIT
+
+dimDD	= dim(demoDelay);
+
+if (delayClear) {
+	// clear delay data when chosen from parent
+	// (like sending 'clear' message to MSP [delay~])
+	for(i = 0; i < dimDD; i += 1) {
+		poke(demoDelay, 0, i, 0, 0, index="samples");
+		poke(demoDelay, 0, i, 1, 0, index="samples");
+	}
+
+	delayClear	= 0;						// deactivate once initialised
+
+}
+
+
+//	//	//	PARSE
+
+secssmooth		= smooth * 0.01;			// seconds (ignore)
+
+dryLeft		= in1;
+dryRight	= in2;
+
+
+//	//	//	PROCESSING
+
+// make read/write phase
+
+dDelPhse		= wrap((demoDelayPhase + 1), 0, dimDD);
+demoDelayPhase	= dDelPhse;
+
+// write to buffer
+
+poke(demoDelay,	dryLeft,	dDelPhse,	0, 0,	index="samples");
+poke(demoDelay,	dryRight,	dDelPhse,	1, 0,	index="samples");
+
+// read from buffer
+
+smoothDelay					= expsmooth(demodelaytime, secssmooth);
+theDemoDelay				= wrap((dDelPhse - smoothDelay), 0, dimDD);
+MainLeft, ddpsl				= sample(demoDelay, theDemoDelay, 0, 
+										index="samples", interp="cubic");
+MainRight, ddpsr			= sample(demoDelay, theDemoDelay, 1, 
+										index="samples", interp="cubic");
+									//	^^ "cubic" here, but change to taste...
+//	//	//	OUTPUTS
+
+out1	= MainLeft;
+out2	= MainRight;

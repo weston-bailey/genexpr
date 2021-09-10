@@ -1,0 +1,16 @@
+allpass(signal, delayTime, gain){
+    Delay ff(1000);
+    Delay fb(1000);
+    ffTap = ff.read(delayTime);
+    fbTap = fb.read(delayTime);
+
+    ap = fixdenorm((ffTap+(clamp(gain, 0., .99)*(signal-fbTap))));
+
+    fb.write(ap);
+    ff.write(signal);
+
+    return (ap);
+
+}
+
+out1 = allpass(in1, in2, in3);

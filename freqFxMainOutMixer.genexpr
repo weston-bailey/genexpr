@@ -1,0 +1,225 @@
+stereoBypass(L, R){
+    return L, R;
+}
+
+msWidth(L, R, width){
+    
+    scaleL =  L * .5; 
+    scaleR = R * .5;
+    
+    mid = scaleL + scaleR;
+    side = scaleL - scaleR;
+    
+    w = side * width;
+    invW = w * -1.;
+    
+    widthL = mid + w;
+    widthR = mid + invW;
+    
+    return widthL, widthR;
+
+}
+
+msWidthHaas(L, R, width, haas){
+    
+    Delay hDelay(samplerate * .02);
+    haasTap = hDelay.read(haas);
+
+    scaleL =  haasTap * .5; 
+    scaleR = R * .5;
+    
+    mid = scaleL + scaleR;
+    side = scaleL - scaleR;
+    
+    w = side * width;
+    invW = w * -1.;
+    
+    widthL = mid + w;
+    widthR = mid + invW;
+
+    hDelay.write(L);
+
+    return widthL, widthR;
+
+}
+
+stereoBalance(xL, xR, bal, base){
+    //bal 0 - 1.;
+    //base: 0.25 = 1.5 dB 0.5   = 3 dB 0.75 = 4.5 dB 1 = 6dB (linear)
+    cL = pow((1. - bal), base);
+    cR = pow(bal, base);
+
+    balanceL = xL * cL;
+    balanceR = xR * cR;
+
+    return balanceL, balanceR; 
+
+}
+
+dryWet(dryL, dryR, wetL, wetR, cross){
+
+    invControl = 1. - cross;
+
+    dryL = dryL * invControl;
+    dryR = dryR * invControl;
+
+    wetL = wetL * cross;
+    wetR = wetR * cross;
+
+    outL = dryL + wetL;
+    outR = dryR + wetR;
+
+    return outL, outR;
+
+}
+/* unused
+dryWetBalanced(dryL, dryR, wetL, wetR, cross){
+	
+    offset = cross + .75;
+	xfade1 = cycle(cross, index="phase");
+	xfade2 = cycle(offset, index="phase");
+
+    dryL = dryL * xfade1;
+    dryR = dryR * xfade1;
+
+    wetL = wetL * xfade2;
+    wetR = wetR * xfade2;
+
+    outL = dryL + wetL;
+    outR = dryR + wetR;
+
+    return outL, outR;
+
+}
+
+//pan 
+stereoXfadeBalanced(L, R, cross){
+	
+    offset = cross + .75;
+	xfade1 = cycle(cross, index="phase");
+	xfade2 = cycle(offset, index="phase");
+
+    LpanL = L * xfade1;
+    LpanR = L * xfade2;
+
+    RpanL = R * xfade1;
+    RpanR = R * xfade2;
+
+    outL = LpanL + RpanL;
+    outR = RpanR + LpanR;
+
+    return outL, outR;
+
+}
+*/
+stereoGain(L, R, A){
+
+    gainL = L * A;
+    gainR = R * A;
+
+    return gainL, gainR;
+
+}
+
+//All fsfx mixer specific
+mswh(L, R, width, haas){
+    
+    mswhL = 0;
+    mswhR = 0;
+    
+    if (width >= 0. && haas > 0.){
+        mswhL, mswhR = msWidthHaas(L, R, width, haas);
+    }
+    else if (width >= 0. && haas == 0.){
+        mswhL, mswhR = msWidth(L, R, width);
+    }
+
+    return mswhL, mswhR;
+
+}
+
+bal(L, R, bal){
+
+    balanceL = 0;
+    balanceR = 0;
+
+    if (bal > .5 || bal < .5){
+        balanceL, balanceR = stereoBalance(L, R, bal, 1.);
+    }
+    else if (bal == .5){
+        balanceL, balanceR = stereoBypass(L, R);    
+    }
+
+    return balanceL, balanceR;
+}
+
+dw(dryL, dryR, wetL, wetR, cross){
+
+    dwL = 0;
+    dwR = 0;
+    
+    if (cross > 0 && cross < 1.){ 
+        dwL, dwR = dryWet(dryL, dryR, wetL, wetR, cross);
+        }
+        else if (cross == 0.){
+        dwL, dwR = stereoBypass(dryL, dryR); 
+        }
+        else if (cross == 1.){
+        dwL, dwR = stereoBypass(wetL, wetR); 
+        }
+
+    return dwL, dwR;
+
+}
+/*
+pan(L, R, cross){
+
+    panL = 0;
+    panR = 0;
+
+    if (cross > .125 || cross < .125){
+        panL, panR = stereoXfadeBalanced(L, R, cross);
+    }
+    else if (cross == .125){
+        panL, panR = stereoBypass(L, R);
+    }  
+
+    return panL, panR;
+
+}
+*/
+
+amp(L, R, A){
+    
+    ampL = 0;
+    ampR = 0;
+
+    if (A > 1. || A < 1.){
+        ampL, ampR = stereoGain(L, R, A);
+    }
+    else if (A == 1.){
+        ampL, ampR = stereoBypass(L, R);    
+    }
+
+    return ampL, ampR;
+
+}
+
+/*
+in1 = wetL; 
+in2 = wetR;  
+in3 = width; 
+in4 = haas;
+in4 = balance;
+in6 = gain;
+*/
+
+fxMidSideL, fxMidSideR = mswh(in1, in2, in3, in4);
+
+fxBalL, fxBalR = bal(fxMidSideL, fxMidSideR, in5);
+
+fxGainL, fxGainR = amp(fxBalL, fxBalR, in6);
+
+//fxDryWetL, fxDryWetR = dw(in1, in2, fxGainL, fxGainR, in9);
+
+out1, out2 = fxGainL, fxGainR;

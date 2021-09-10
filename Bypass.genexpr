@@ -1,0 +1,35 @@
+require ("fsDSPLibrary.genexpr");
+
+Param envFlag(0., min=0., max=1);
+
+//for fx mixer
+Param width(1, min=0.0, max=2.0);
+Param haas(0.0, min=0.0, max=20.0);
+Param bal(0.5, min=0.0, max=1.0);
+Param gain(1);
+Param drywet(0.5, min=0.0, max=1.0);
+
+//smoothing for fx mixer
+sWidth = mixSmooth(width, .999);
+sHaas = mixSmooth(haas, .999);
+sBal = mixSmooth(bal, .999);
+sGain = mixSmooth(gain, .999);
+sDrywet = mixSmooth(drywet, .999);
+
+dryL, dryR, wetL, wetR = in1, in2, in3, in4;
+inFlag = dryL || dryR || wetL || wetR;
+
+//main dsp call
+yL = 0;
+yR = 0;
+if (inFlag == 1 || envFlag == 1){
+        
+        yL, yR = fxMixer(dryL, dryR, wetL, wetR, sWidth, sHaas, sBal, sGain, sDrywet);
+    }
+    else{
+        yL = 0;
+        yR = 0;
+    }
+
+out1 = yL;
+out2 = yR;

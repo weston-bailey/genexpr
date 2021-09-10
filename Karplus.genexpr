@@ -1,0 +1,69 @@
+onepole(signal, freq){
+	History y0(0);
+	
+	//calc coefficient
+	a = clamp((abs(freq)*sin(2*PI/samplerate)), 0, 1);
+	//fiter
+	lp = mix(y0, signal, a);
+	y0 = lp;
+	/*
+    hp = signal - lp;
+	
+	
+	if (type == 1) {
+		return hp;
+	}
+	else if (type == 0) {
+		return lp;
+	}
+	else {
+		return signal;
+	}
+    */
+    return lp;
+}
+
+
+comb(signal, delay, fb, gain){
+	 
+    Delay feedback(samplerate);
+	fbRead = feedback.read(delay);
+	fbLim = clamp(fb, -1., 1.);
+	
+	scaledSig = signal * gain;
+	scaledfb = fbLim * fbRead;
+	
+	combfilter = (scaledSig - scaledfb);
+	//damp= onepole(combfilter, freq, type);
+	feedback.write(combfilter);
+	
+	return dcblock(combfilter);
+}
+
+pan(signal, xfade) {
+	
+	cross = clamp(xfade, 0., .25);
+	offset = cross + .75;
+	xfade1 = cycle(cross, index="phase");
+	xfade2 = cycle(offset, index="phase");
+	L = signal * xfade1;
+ 	R = signal * xfade2;
+	
+	return L, R;
+}
+
+
+
+sigAdd = in1 + in2;
+pitch = samplerate/in3;
+powDur = samplerate*.00001;
+dur = pow(powDur, pitch/abs(clamp(in4, 1., 15000.)));
+
+combString = comb(sigAdd, pitch, dur, in5);
+resonator = onepole(combString, clamp(in6, 50., 7000.));
+
+resonL, resonR = pan(resonator, in7);
+
+out1 = tanh(resonL);
+out2 = tanh(resonR;
+

@@ -1,0 +1,40 @@
+require ("fsDSPLibrary.genexpr");
+
+Param envFlag(0., min=0., max=1);
+
+//for fx mixer
+Param width(1, min=0.0, max=2.0);
+Param haas(0.0, min=0.0, max=20.0);
+Param bal(0.5, min=0.0, max=1.0);
+Param gain(1);
+Param drywet(.5, min=0.0, max=1.0);
+
+//fs specifc
+Param fc(700, min=33);
+Param Q(1.138, min=1.138, max=12);
+Param xfade(0, min=0, max=.5);
+Param poles(0.0, min=0.0, max=1.0);
+
+//inputs
+dryL = in1;
+dryR = in2;
+
+inFlag = dryL || dryR;
+
+yL = 0;
+yR = 0;
+
+//main dsp call
+if (inFlag == 1 || envFlag == 1){
+        yL, yR = cleanSVF(dryL, dryR, 
+                                fc=fc, Q=Q, xfade=xfade, poles=poles,
+                                        width=width, haas=haas, bal=bal, gain=gain, drywet=drywet);
+    }
+    else{
+        yL = 0;
+        yR = 0;
+}
+
+
+out1 = yL;
+out2 = yR;

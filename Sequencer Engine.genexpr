@@ -1,0 +1,58 @@
+offSet(){
+    Param step();
+    Param pattern();
+    return step + (pattern * 64);
+
+}
+
+
+Buffer inGen("inGen");
+
+Param step0();
+Param step1();
+Param step2();
+Param step3();
+Param step4();
+Param step5();
+Param step6();
+Param redAdd();
+Param orangeAdd(0);
+Param yellowAdd(0);
+Param greenAdd(0);
+Param blueAdd(0);
+Param indigoAdd(0);
+Param violetAdd(0);
+Param pattern(1);
+
+/*
+step0 = in1;
+step1 = in2;
+step2 = in3;
+step3 = in4;
+step4 = in5;
+step5 = in6;
+step6 = in7;
+*/
+
+seq0 = peek(inGen, offSet(step=step0, pattern=pattern), 0, index="samples");
+seq1 = peek(inGen, offSet(step=step1, pattern=pattern), 1, index="samples");
+seq2 = peek(inGen, offSet(step=step2, pattern=pattern), 2, index="samples");
+seq3 = peek(inGen, offSet(step=step3, pattern=pattern), 3, index="samples");
+seq4 = peek(inGen, offSet(step=step4, pattern=pattern), 4, index="samples");
+seq5 = peek(inGen, offSet(step=step5, pattern=pattern), 5, index="samples");
+seq6 = peek(inGen, offSet(step=step6, pattern=pattern), 6, index="samples");
+
+
+
+
+out1 = clamp(seq0 + redAdd, 0, 1);
+out2 = clamp(seq1 + orangeAdd, 0, 1);
+out3 = clamp(seq2 + yellowAdd, 0, 1);
+out4 = clamp(seq3 + greenAdd, 0, 1);
+out5 = clamp(seq4 + blueAdd, 0, 1);
+out6 = clamp(seq5 + indigoAdd, 0, 1);
+out7 = clamp(seq6 + violetAdd, 0, 1);
+//out8 = offSet(step=step0, pattern=pattern);
+
+
+

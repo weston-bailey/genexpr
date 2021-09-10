@@ -1,0 +1,65 @@
+require ("fsDSPLibrary.genexpr");
+
+//filter loop NL have to be declared local for some reason. History issues?
+cNL(x) {
+	
+    //x = x * 10;
+    cnl = (x * (1 - 0.3333333 * x * x));
+        
+    return cnl;
+
+}
+    
+tanhFastPD(x){
+    
+    ax = abs(x);
+    x2 = x * x;
+
+    a = x * ( 2.45550750702956 + 2.45550750702956 * ax +
+    ( 0.893229853513558 + 0.821226666969744 * ax ) * x2);
+    b = ( 2.44506634652299 + ( 2.44506634652299 + x2 ) *
+    abs( x + 0.814642734961073 * x * ax ));
+
+    tanhPD = a / b;
+
+    return tanhPD;
+
+}
+
+Param envFlag(0., min=0., max=1);
+
+//for fx mixer
+Param width(1, min=0.0, max=2.0);
+Param haas(0.0, min=0.0, max=20.0);
+Param bal(0.5, min=0.0, max=1.0);
+Param gain(1);
+Param drywet(.5, min=0.0, max=1.0);
+
+//fs specifc
+Param fc(700, min=33);
+Param Q(1.138, min=1.138, max=12);
+Param xfade(0, min=0, max=.5);
+Param poles(0.0, min=0.0, max=1.0);
+Param drive(1., min=1., max=20); //do not exceed 3.
+
+//inputs
+dryL = in1;
+dryR = in2;
+
+inFlag = dryL || dryR;
+
+yL = 0;
+yR = 0;
+//main dsp call
+if (inFlag == 1 || envFlag == 1){
+    yL, yR = dirtySVF(dryL, dryR, 
+                                fc=fc, Q=Q, xfade=xfade, poles=poles, drive=drive, 
+                                        width=width, haas=haas, bal=bal, gain=gain, drywet=drywet);
+    }
+    else{
+        yL = 0;
+        yR = 0;
+}
+
+out1 = yL;
+out2 = yR;

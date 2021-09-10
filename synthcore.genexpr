@@ -1,0 +1,1771 @@
+/*					
+						SYNTHCORE - ALL AUDIO IN GEN
+- LIBRARY CONTENTS
+  * MATHS - qcos(), qsin(), db2a().
+  * PANS & SMOOTHERS - pan1(), pan2(), smoother(), smoother2(), smoother3(), 
+    rampgate(), ramptrig(), line(). 
+  * SATURATORS- parabol1(), parabol2(), paraboln(), hyperbol().
+  * 1-POLE FILTERS - static(), staticlo(), statichi(), shelflo(), shelfhi(). 
+  * BIQUADS - biquad(), biquad0(), biquadlow(), biquadlo2(), biguadlo3(),
+	biquadband(), biquadband2(), biquadband3(), biquadhi(), biquadhi2(),
+	biquadhi3(), biquadnotch(), biquadval(), biquadamp(), biquadplot(), 
+	biquadplot2().
+  * RAMP OSCS - ramp(), ramptrg(), rampgate(), rampphase(), rampsoft(),
+    rampsofter(), rampramp(), rampramper().
+  * OSCS  -	sine(), pulse1(), pulse2(), eptr(), eptrpulse(), eptrpulse3x(),
+	sawdown(), sawup(), tri(), tri2(), sawtri(), karplus(), karplusd(),
+	karplusenv(), karplusm(), waveset(), noiselpf(), noisebpf(), noisehpf(), 
+	noisenotch(), pinknoise(), noiseosc(), osc().
+  * IIR - comb().
+  * SVFs - upsample(), downsample(), svf(), svfCoeffs3x(), gainComp(), 
+    svfMixer(), filt3x(), filt().
+  * LFOs - lfo(), lfopoly().
+  * EnvS - adsr(), adsrloop(), padsrloop(), adbdsrloop(), padbdsrloop().
+  * EFFECTS - glide(), ping1(), ping2(), chorus1(), chorus2(), diffdelay(), 
+    earlyreflections(), tank(), reverb()
+- DECLARATIONS - Buffers and constants.
+
+**********************************************************************************
+FUNCTION LIBRARY
+	For Max 7.3.1.+ Parts may work with older versions but it's not been checked.
+    These are optimized functions. Input ranges are not clipped or normalized. 
+	Inputs are in range 0~1, and outputs are bipolar, unless otherwise noted.
+	Samplerate constants are passed in, as they are not compiled out of functions.
+**********************************************************************************/
+
+// math functions *************************************************************/
+qcos(x){										// quick cosine calc
+	x *= x;
+	x = x*(x*(x*(x*(x *-.0000002605 +.000024709
+		)- .00138884)+.416667)- .499923)+ 1;
+	return x;
+}
+qsin(y){										// quick sine calc
+	x =y * y;
+	x = y*(x*(x*(x*(x*(x *.0000000239 +.0000027526
+		)- .000198409)+.008333333)- .16666667)+ 1); 
+	return x;
+}
+db2a(db){										// quick db2a convert
+	x = pow(db,1.12202);
+	return x;
+}
+//**********************************************************************
+// pans  and smoothers (actually integrators)
+/******************************************************************************/
+pan1(pan){								// optimized pan with +3dB at center
+// returns 0~1 values for gain control
+	p = 1 - pan;
+	return 
+		p * (4 - p)     *.333333333333333,	// left
+		pan * (4 - pan) *.333333333333333;	// right
+}
+pan2(pan, left, right){ 				// optimized pan with +3dB at center
+// returns panned signal
+	p = 1 - pan;
+	return 
+		left * p * (4 - p)      *.333333333333333,	// left
+		right * pan * (4 - pan) *.333333333333333;	// right
+}
+smoother1(val){ 			// smoothing over ~46 clock cycles
+	History z1, zdir;
+	x = change(val);
+	if (x !=0) zdir = x;
+ 	if (zdir >0) z1 = (z1 < val -.02)? val * .01 + z1 *.99 : val;
+	else z1 = (z1 > val +.02)? val * .01 + z1 *.99 : val;
+	return z1;
+}
+smoother2(val){ 			// slower smoothing for delay line times
+	History z1, zdir;
+	x = change(val);
+	if (x !=0) 
+		zdir = x;
+ 	if (zdir >0) z1 = (z1 < val -.002)? val * .001 + z1 *.999 : val;
+	else z1 = (z1 > val +.002)? val * .001 + z1 *.999 : val;
+	return z1;
+}
+smoother3(val){ 			// slowest smoothing for long delay line times
+	History z1, zdir;
+	x = change(val);
+	if (x !=0) zdir = x;
+ 	if (zdir >0) z1 = (z1 < val -.0002)? val * .0001 + z1 *.9999 : val;
+	else z1 = (z1 > val +.0002)? val * .0001 + z1 *.9999 : val;
+	return z1;
+}
+ramptrig(msecs, trg, rsrms){					// ramp, time in msecs
+//		msecs: 	duration or ramp
+//		trg: 	when HIGH, restarts
+//		srms: 	constant, 1000/samplerate
+// returns ramped signal in 0~1 range
+	History z1;
+	inc = rsrms/ msecs;
+	if (trg >0) z1 = 1;
+	if (z1 >0) { z1 = z1 - inc; return z1; } 
+	else       { z1 = 0;        return 0;  }
+}
+line(input, inc){								// line~, 
+// incr 	1 / (samplerate * linetime)
+	History z0, z1, z2, z3;
+	y = input - z0;
+	z0 = input;
+	if (y != 0) { z1 = 0; z2 = y; z3 = input;        }
+	if (z1 <1)  { z1 = z1 + inc; return z1 * z2 + z3;} 
+	else        { z1 = 0;        return y;           }
+}
+/******************************************************************************/
+// Saturators
+// all inputs are bipolar
+parabol1(input){ 				// parabolic in unity range, clipped above it
+output = clip(input, -1, 1); 
+	return 
+		output * (1 -(abs(output) * .125));
+}
+parabol2(input){ 				// parabolic with 2x headroom
+	output = clip(input, -2, 2); 
+	return output * (1 -(abs(output) * .25));
+}
+paraboln(input, slope){			// parabolic with adjustable slope
+// slope controls POW factor
+	output += pow(abs(input),1- slope *.01) * sign(input);
+}
+hyperbol(input, x){				// hyperbolic within unity output range
+// x controls hyperbolic factor
+	return (input > 0)?
+			x -(x *(x /(abs(input) +x))) :  
+		neg(x -(x *(x /(abs(input) +x))));  
+}
+//**************************************************************
+// 1-pole filters 
+//**************************************************************
+static(input, a1, b0, b1){						//1-pole core
+// input		signal to filter
+// a1, b0, b1 	coefficients from below functions
+	History zx1, zx2;
+	x = zx1   * a1  + input * b0  + zx2   * b1;
+	zx1 = x; zx2 = input; return x;	
+}
+staticlo(fc){							//1-pole low pass
+// returns filtered signal 
+// fc		cutoff in Hz,  range sr/24576~sr/2.125
+	c1 = tan(fc * pi/samplerate);
+	c2 = 1 /(c1 + 1);
+	a1 = (1 - c1) * c2; 
+	b0 = c1       * c2;
+	return a1, b0, b0;
+}
+statichi(fc){							//1-pole high pass
+	c1 = tan(fc * pi/samplerate);
+	b0 = 1 /(c1 + 1);
+	b1 = neg(b0);
+	a1 = (1 - c1) * b0; 
+	return a1, b0, b1;
+}
+shelflo(fc, b){							//1-pole low shelf
+// returns filtered signal 
+// fc		cutoff in Hz, range sr/24576~sr/2.125
+// b		low-freqency boost(dB), 1~36
+	a  = pow(b, 1.059);
+	a *= a;
+	fc = fc /a;
+	c1 = tan(fc * pi/samplerate);
+	c2 = 1 /(c1 + 1);
+	a1 = (1 - c1) * c2; 
+	c1 = (a - 1) *  c1 * c2;
+	b0 = c1 + 1;
+	b1 = c1 - a1;
+	return a1, b0, b1;
+}
+shelfhi(fc, b){							//1-pole high shelf
+// returns filtered signal 
+// fc		cutoff in Hz, range sr/24576~sr/2.125
+// b		high-freqency boost(dB), range 1~36 
+	a  = pow(b, 1.059);
+	fc = fc * a;
+	a *= a;
+	c1 = tan(fc * pi/samplerate);
+	c2 = 1 /(c1 + 1);
+	a1 = (1 - c1) * c2;
+	b1 = (a - 1)  * c2;
+	b0 = b1 +1;
+	b1 = neg(a1 + b1);
+	return a1, b0, b1;
+}
+/******************************************************************************/
+// Biquads 
+//********************************************************************
+biquad0(input, a0, a1, a2, b1, b2) {		// direct form 1
+	// for some reason this doesn't work,
+ 	// but the next one is better anyway
+	History z1, z2, z3, z4;
+	y  = input * a0
+		+ z1 * a1
+		+ z2 * a2
+		- z3 * b1
+		- z4 * b2;
+	z1 = input;
+	z2 = z1;
+	z3 = y;
+	z4 = z3;
+	return y;
+}
+biquad(input, a0, a1, a2, b1, b2) { 		// optimized form 2
+	// theoretically more efficient
+	History z1, z2;
+	output = (input * a0) + z2;
+	z2     = ((input * a1) - (output * b1)) + z1;
+	z1     = (input *  a2) - (output * b2);
+	return output;
+}
+biquadlo(fc, Q, rsrxpi){  					// simple lowpass
+//  fc		cutoff freq, Hz 
+//  Q		resonance, typ 1~20, cannot be zero
+// rsrxpi 	constant, pi/samplerate 
+// returns standard biquad coefficients
+	k = tan(rsrxpi * fc);
+	norm = 1 /(1 + k / Q + k * k);
+	a0 = k * k * norm;
+	a1 = a0 *2;
+	//a2 = a0;				// merged into return
+	b1 = (k * k - 1) * norm *2;
+	b2 = (1 - k / Q + k * k) * norm;
+	return a0, a1, a0, b1, b2;
+}
+biquadband(fc, Q, rsrxpi){					//simple bandpass
+//  I/O ranges same as biquadlow
+	k = tan(rsrxpi * fc);
+	norm = 1 / (1 + k / Q + k * k);
+	a0 = k / Q * norm;
+	// a1 = 0;				// merged into return
+	// a2 = -a0;
+	b1 = 2 * (k * k - 1) * norm;
+	b2 = (1 - k / Q + k * k) * norm;
+	return a0, 0, neg(a0), b1, b2;
+}
+biquadhi(fc, Q, rsrxpi){					//simple highpass
+//  I/O ranges same as biquadlow
+	k = tan(rsrxpi * fc);
+	norm = 1 / (1 + k / Q + k * k);
+	a0 = 1 * norm;
+	a1 = -2 * a0;
+	// a2 = a0;				// merged into return
+	b1 = 2 * (k * k - 1) * norm;
+	b2 = (1 - k / Q + k * k) * norm;
+	return a0, a1, a0, b1, b2;
+}
+biquadnotch(fc, Q, rsrxpi){					//simple notch 
+//  I/O ranges same as biquadlow
+	k = tan(rsrxpi * fc);
+	norm = 1 / (1 + k / Q + k * k);
+	a0 = (1 + k * k) * norm;
+	a1 = 2 * (k * k - 1) * norm;
+	// a2 = a0;				// merged into return
+	// b1 = a1;
+	b2 = (1 - k / Q + k * k) * norm;
+	return a0, a1, a0, a1, b2;
+}
+biquadlo2(p, q, rsrxpi2){					// standard-range i/p low
+// p	pitch in midi units
+// q	range 0 to < 1.
+	omega = mtof(p) * rsrxpi2;
+	alpha = (1 - q) * qsin(omega);
+	omega = qcos(omega);
+	b0    = 1 / (alpha + 1);
+	b1    = b0 * omega * -2;
+	b2    = b0 * (1 - alpha);
+	a1    = b0 * (1 - omega);
+	a0    = a1 * .5;
+	//a2  = a0;
+	return a0, a1, a0, b1, b2;
+}
+biquadlo3(p, q, rsrxpi2){					// qain-limiting low
+// p	pitch in midi units
+// q	range 0 to < 1.
+	omega = mtof(p) * rsrxpi2;
+	alpha = (1 - q) * qsin(omega);
+	omega = qcos(omega);
+	b0    = 1 / (alpha + 1);
+	b1    = b0 * omega * -2;
+	b2    = b0 * (1 - alpha);
+	b2    = b0 * (1 - alpha);
+	a1    = b0 * (1 - omega);
+	a0    = a1 * alpha;
+	a2    = b0 * alpha;
+	return a0, a1, a2, b1, b2;
+}
+biquadband2(p, q, rsrxpi2){					// standard-range i/p band
+// p	pitch in midi units
+// q	range 0 to < 1.
+	omega = mtof(p) * rsrxpi2;
+	alpha = (1 - q) * qsin(omega);
+	omega = qcos(omega);
+	b0    = 1 / (alpha + 1);
+	b1    = b0 * omega * -2;
+	b2    = b0 * (1 - alpha);
+	a0    = b0 * (1 -omega) * .5;
+	//a1    = 0;
+	a2    = neg(a0);
+	return a0, 0, a2, b1, b2;
+}
+biquadband3(p, q, rsrxpi2){					// gain limiting band
+// p	pitch in midi units
+// q	range 0 to < 1.
+	omega = mtof(p) * rsrxpi2;
+	alpha = (1 - q) * qsin(omega);
+	omega = qcos(omega);
+	b0    = 1 / (alpha  + 1);
+	b1    = b0 * omega * -2;
+	b2    = b0 * (1 - alpha);
+	a0    = b0 * alpha;
+	//a1  = 0;
+	a2    = b0 * neg(alpha);
+	return a0, 0, a2, b1, b2;
+}
+biquadband4(p, q, rsrxpi2){					// unity-gain band
+// p	pitch in midi units
+// q	range 0 to < 1.
+	omega = mtof(p) * rsrxpi2;
+	alpha = (1 - q) * qsin(omega);
+	omega = qcos(omega);
+	b0    = 1 / (alpha + 1);
+	b1    = b0 * omega * -2;
+	b2    = b0 * (1 - alpha);
+	a0    = b0 * alpha;
+	//a1  = 0;
+	a2    = b0 * neg(alpha);
+	return a0, 0, a2, b1, b2;
+}
+biquadhi2(p, q, rsrxpi2){					// standard-range i/p hi
+// p	pitch in midi units
+// q	range 0 to < 1.
+	omega = mtof(p) * rsrxpi2;
+	alpha = (1 - q) * qsin(omega);
+	omega = qcos(omega);
+	b0    = 1/(alpha +1);
+	b1    = b0 * omega * -2;
+	b2    = b0 * (1 - alpha);
+	a1    = b0 * neg(omega +1);
+	a0    = a1 * -.5;
+	//a2  = a0;
+	return a0, a1, a0, b1, b2;
+}
+biquadhi3(p, q, rsrxpi2){					// gain limiting hi
+// p	pitch in midi units
+// q	range 0 to < 1.
+	omega = mtof(p) * rsrxpi2;
+	alpha = (1 - q) * qsin(omega);
+	omega = qcos(omega);
+	b0    = 1/(alpha +1);
+	b1    = b0 * omega * -2;
+	b2    = b0 * (1 - alpha);
+	a1    = b0 * (omega + 1) * alpha * 40;
+	a0    = a1 * -.5;
+	a2    = a0;
+	return a0, a1, a0, b1, b2;
+}
+biquadamp(w, a0, a1, a2, b1, b2){		// filter gain at any freq
+// w		omega (fc * 2 * pi / samplerate)
+// a0-b2	biquad coefficents
+	num = a0 * a0 + a1 * a1 + a2 * a2 
+		+ (a0 * a1 + a1 * a2) * cos(w) * 2 
+		+ a0 * a2 * cos(2 * w) * 2;
+ 	nom = b1 * b1 + b2 * b2 + 1
+		+ (b1 + b1 * b2) * cos(w) * 2
+		+ b2 * cos(2 * w) * 2;
+ 	return sqrt(num / nom);   
+}
+biquadval(a0, a1, a2, b1, b2, fc, q){		// value at point
+//  (not checked)
+	n = fc;
+    w = q; 
+    y = log(pow(a0+a1+a2, 2) 
+		- 4.*(a0 * a1 + 4.* a0 * a2 + a1 * a2) * pow(sin(w / 2), 2) 
+		+ 16.* a0 * a2* pow(sin(w / 2), 4)) 
+		- log(pow(1. +b1 +b2, 2) 
+		- 4.*(b1 + 4.*b2 + b1 * b2) * pow(sin(w / 2), 2) 
+		+ 16 * b2 * pow(sin(w / 2), 4));
+    y = y * 10 / log(10);
+	return y;
+}
+biquadplot(									// plots lp/bp/hp graph
+	fc, q, a0, a1, a2, b1, b2, rsrxpi2, period, isnotch){
+// filterdraw	the Max buffer name into which 
+//				filter is drawn, sizeinsamps = 110 
+// fc 			filter cutoff in Hz
+// a0-b2		biquad coefficients
+// rsrxpi		constant, 2 * pi /samplerate
+	Buffer filterdraw;
+	History zi;
+	x, y = 0;
+	i = zi + 1;
+	if (i > period) 
+		i = 0;
+	zi = i;
+	if(i < 110){
+		x =	biquadamp(mtof(i +20) * rsrxpi2, 
+			a0, a1, a2, b1, b2);
+		filterdraw.poke(x, i);
+	}
+	return -1;
+}
+biquadplot2(	// plots LP/BP/HP/NOTCH filter graph with scaling
+	fc, q, a0, a1, a2, b1, b2, rsrxpi2, period, isnotch){
+// filterdraw	the Max buffer name into which 
+//				filter is drawn, sizeinsamps = 110 
+// fc 			filter cutoff in Hz
+// a0-b2		biquad coefficients
+// rsrxpi		constant, 2 * pi /samplerate
+	Buffer filterdraw;
+	History zi;
+	x, y = 0;
+	i = zi + 1;
+	if (i > period) 
+		i = 0;
+	zi = i;
+	if(i < 110){
+		if (isnotch==0){
+			y = biquadamp(fc * rsrxpi2, // gain at fc
+				a0, a1, a2, b1, b2);
+			x =	biquadamp(mtof(i +20) * rsrxpi2, 
+				a0, a1, a2, b1, b2);
+			filterdraw.poke(atodb(x), i);
+		} else {
+			x =	biquadamp(mtof(i +20) * rsrxpi2, 
+				a0, a1, a2, b1, b2);
+			if (i==round(ftom(fc)-20)) x = 0;
+			filterdraw.poke(atodb(x), i);
+		}
+		return 0;
+	}else {
+		return i;
+	}
+}
+/******************************************************************************/
+// SVF Filters
+upsample(input){						// 3x upsampling with sinc coefficients
+	History ta1, ta2, ta3;
+	val2 = input * -0.074074074074074
+			+ ta1 * 0.77777777777778
+			+ ta2 * 0.33333333333333
+			+ ta3 *-0.037037037037037;
+	val3 = input *  -0.037037037037037 
+			+ ta1 * 0.33333333333333 
+			+ ta2 * 0.77777777777778 
+			+ ta3 *-0.074074074074074;
+	val1 = ta1;	// cascade history
+	ta3 = ta2;
+	ta2 = ta1;
+	ta1 = input;
+	return val1, val2, val3;
+} 
+downsample(val1, val2, val3){		// 3x downsampling with sinc coefficients
+	History	tb1, tb21, tb22, tb23, tb31, tb32, tb33;		
+	output = tb1  
+		+ val2 *-0.074074074074074 // t01
+		+ tb21 * 0.77777777777778  // t02
+		+ tb22 * 0.33333333333333  // t02
+		+ tb23 *-0.037037037037037 // t03
+		+ val3 *-0.037037037037037 // t10 
+		+ tb31 * 0.33333333333333  // t11 
+		+ tb32 * 0.77777777777778  // t12 
+		+ tb33 *-0.074074074074074;// t13
+	tb33 = tb32; tb32 = tb31; tb31 = val3; // delay line for downsampling
+	tb23 = tb22; tb22 = tb21; tb21 = val2;
+	tb1  = val1;
+	return output;
+}
+svf(input, wa, d1, ft1, ft1n, ft2, zlp, zbp){		// svf core
+	hp  = input - (zlp + d1 * zbp); 
+	x   = zbp + hp * wa;
+ 	lp  = x * wa + zlp; 
+	bp  = clip(x, ft1n, ft1);
+	bp  *= 1 - (abs(bp) * ft2); 
+	return lp, bp, hp;
+}
+svfCoeffs3x(f0, q0, s0, f4x, rsrx2pi){	// coefficents for 3x-oversampled SVF
+	History hq0(-1), hs0(-1), q1, q2, q3, s1;
+	f1   = mtof(f0);
+	// Q calculation
+	if(q0!=hq0){
+		q1  = (q0 <50)?  q0 *0.018032 : pow(q0 *.01, .3) *1.11;
+		q2  = 1 - max(1, q1);
+		q2  = 1 - (q2 * q2 -.0925);
+		q3  = 1 - q1;
+		q3 += q3;
+	}
+	hq0 = q0;
+	wa  = min(1, rsrx2pi * q2 * f1); 
+	ft1 = 1 / wa;
+	d1  = (2 - wa) * ft1;
+	d2  = min(d1, 1 - (f4x * q1));
+	d1  = min(d1, q3);
+	if(s0!=hs0){
+		s1 = dbtoa(s0 *.24 -.12);
+	}
+	hs0 = s0;
+	ft1 *= s1;
+	ft2  = .25 / ft1;
+	ft1 *= ft1;
+	ft1n = neg(ft1);
+	return ft1, ft1n, ft2, wa, d1, d2;
+}
+filt3x(input,f0, q0, s0, 				// 3x-oversampled 6-way 2p/4p SVF filter
+		lx, bx, hx, f2x, l4x, b4x, h4x, f4x, rsrx2pi){
+	History zl1, zb1, zl2, zb2;
+	o1, o2, o3 = upsample(input);
+	ft1, ft1n, ft2, wa, d1, d2 = svfCoeffs3x(f0, q0, s0, f4x, rsrx2pi);
+	// 1st 2-pole filter, 3x oversampled
+	l1, b1, h1 = svf(o1, wa, d1, ft1, ft1n, ft2, zl1, zb1);
+	l2, b2, h2 = svf(o2, wa, d1, ft1, ft1n, ft2, l1,  b1);
+	l3, b3, h3 = svf(o3, wa, d1, ft1, ft1n, ft2, l2,  b2);
+	zl1 = l3; 
+	zb1 = b3;
+	o1 = lx * l1 + bx * b1  + hx *  h1;	// LP/BP/HP mixing 
+	o2 = lx * l2 + bx * b2  + hx *  h2;
+	o3 = lx * l3 + bx * b3  + hx *  h3;
+	// 2nd 2-pole filter, 3x oversampled
+	l1, b1, h1 = svf(o1, wa, d2, ft1, ft1n, ft2, zl2, zb2);
+	l2, b2, h2 = svf(o2, wa, d2, ft1, ft1n, ft2, l1,  b1);
+	l3, b3, h3 = svf(o3, wa, d2, ft1, ft1n, ft2, l2,  b2);
+	zl2 = l3; 
+	zb2 = b3;
+	o1 = o1 * f2x + l4x * l1 + b4x * b1  + h4x *  h1; // output mix
+	o2 = o2 * f2x + l4x * l2 + b4x * b2  + h4x *  h2;
+	o3 = o3 * f2x + l4x * l3 + b4x * b3  + h4x *  h3;
+	return downsample(o1, o2, o3);
+}
+filt(input, type, poles, drive, fc, q, srflt){	//6-way SVF type and 0/2/4-pole mixers
+// type 	-.01 = lpf, 0 = bpf, .01 = hpf
+// poles	-.01 = none, 0 = 2p, .01 = 4p
+// drive   	sat in range 0~200
+// fc		pitch in midi units
+// q		res 0~100
+// srflt	constant, rsrxpi/3
+ 	Buffer svfgain("svfgain");
+	History lvl, f2, f4, l4, b4, h4, ox, zd;
+	l2, b2, h2, x, y = 0;
+	t  = smoother1(type);
+	p  = smoother1(poles);
+	if(t >0){
+		h2 = t * (4 - t) * .25;
+		x  = 2 - t;
+		b2 = x * (4 - x) * .25;
+   	} else {
+		l2 = t * (4 + t) * -.25;
+		x  = 2 + t;
+		b2 = x * (4 - x) * .25;
+	}
+	if (change(p) != 0){
+		if (p >0){			// now make lvls for osc, 2poles, and 4poles
+			f2 = 1 - p;
+			f4 = p;			// make 4pole lp/bp/hp lvls
+			l4 = f4 * l2;	b4 = f4 * b2;	h4 = f4 * h2;
+			ox = 0;
+		} else {		// mix osc with 2pole
+			f2 = 1 + p;
+			f4 = 0;	l4 = 0;	b4 = 0;	h4 = 0;
+			ox = abs(p);
+		} 
+	}
+	output = filt3x(input,
+		fc, q, drive, l2, b2, h2, f2, l4, b4, h4, f4, srflt);
+	if(change(output >= 0) != 0){ //gain table lookup at sero crossing only
+		if (drive <=100){
+			x = floor(drive) *101 + round(q);
+			y =   l2 * peek(svfgain, x, 0, boundmode="clip")
+				+ b2 * peek(svfgain, x, 1, boundmode="clip")
+				+ h2 * peek(svfgain, x, 2, boundmode="clip");
+			y *= f2;
+			y +=  l4 * peek(svfgain, x, 3, boundmode="clip")
+				+ b4 * peek(svfgain, x, 4, boundmode="clip")
+				+ h4 * peek(svfgain, x, 5, boundmode="clip");
+		} else {
+			x = 10100 + round(q);
+			y =   l2 * peek(svfgain, x, 0, boundmode="clip")
+				+ b2 * peek(svfgain, x, 1, boundmode="clip")
+				+ h2 * peek(svfgain, x, 2, boundmode="clip");
+			y *= f2;
+			y +=  l4 * peek(svfgain, x, 3, boundmode="clip")
+				+ b4 * peek(svfgain, x, 4, boundmode="clip")
+				+ h4 * peek(svfgain, x, 5, boundmode="clip");
+			x = (drive - 100) * .01;
+			y =	mix(y, 1, (1 - x) * x * .00001);
+		}
+		output *= y;
+		lvl = y;
+		zd = drive * .01;
+	} else {
+		output *= lvl;
+	} 
+	if (ox !=0){			// osc mix into filter output
+		output += ox * input; 
+	}
+	if (zd >1){ 			// overdrive saturator
+		x = clip(output, -2,2); 
+		x = (x * (1 -(abs(x) * .25)));
+		output = mix(output, x, zd -1);
+	}
+	return output;
+}
+/******************************************************************************/
+// Ramp Oscillators
+ramp(inc){												// Ramp generator
+	History z1;
+	inc = wrap(inc + z1, 0, 1);
+	z1 = inc;
+	return inc;
+}
+rampsnc(inc, snc){										// Ramp, trig sync
+// snc	+ive transitions cause reset to 0
+// rsr  constant, 1/samplerate
+// resetmode "pre" is so accumulator wraps properly
+// inc must be set to 0 on sync so accum wraps properly rest of time
+	inc = (snc <=0)? inc : 0;
+	return accum(inc, snc, max=1, resetmode="pre");
+}
+rampgate(inc, gate){									// Ramp, gate sync
+// inc		ramp step size/ sample clock
+// gate		+vew transitions cause reset to 0
+	inc = (change(gate ==0) <=0)? inc : 0;
+	return accum(inc, snc, max=1, resetmode="pre");
+}
+rampphase(inc, phase, snc){								// Ramp, phase snc
+// inc		ramp step size/ sample clock
+// snc		+ive transitions cause reset to phase val
+	inc  = (snc <= 0)? inc : inc * phase;
+	return accum(inc, snc, max=1, resetmode="pre");
+}
+rampsoft(inc, phase, thisosc, modosc){					// Ramp, soft snc
+// inc		ramp step size/ sample clock
+// phase	when modulator transitions above this, snc occurs
+// mod		modulator signal, range ~1 ~1
+	snc = 0;
+	if (change(modosc > phase) >0 && thisosc > phase){
+		inc = 0;
+		snc = 1;
+	}
+	return accum(inc, snc, max=1, resetmode="pre");
+}
+rampsofter(inc, phase, thisosc, modosc){					// Ramp, softer snc
+// inc		ramp step size/ sample clock
+// phase	when modulator transitions above this, snc occurs
+// mod		modulator signal, range ~1 ~1
+	snc = 0;
+	if (change(modosc > phase && thisosc > phase) >0){
+		inc = 0;
+		snc = 1;
+	}
+	return accum(inc, snc, max=1, resetmode="pre");
+}
+rampramp(inc, phase, mod){								// Ramp ramped snc
+// inc		ramp step size/ sample clock
+// phase	when modulator transitions above this, snc occurs
+// mod		modulator signal, range ~1 ~1
+	History z1;
+	snc = 0;
+	if (change(z1 > phase) >0 && mod > phase){
+		inc = 0;
+		snc = 1;
+	}
+	ramp = accum(inc, snc, max=1, resetmode="pre");
+	z1 = ramp;
+	return ramp;
+}
+rampramper(inc, phase, mod){							// Ramp, ramper snc
+// inc		ramp step size/ sample clock
+// phase	when modulator transitions above this, snc occurs
+// mod		modulator signal, range ~1 ~1
+	History z1;
+	snc = 0;
+	if (change(z1 > phase && mod > phase) > 0){
+		inc = 0;
+		snc = 1;
+	}
+	ramp = accum(inc, snc, max=1, resetmode="pre");
+	z1 = ramp;
+	return ramp;
+}
+// ******************************************************************************
+// Audio Oscillators
+parasine(inc){					// a sine osc approximation. with much lower cpu
+// inc		increment, freq/samplerate * 4
+	History zinc;
+	zinc = wrap(zinc + inc, 0, 4);
+	x = 0;
+	if(zinc < 1) {
+ 		x = zinc * zinc;
+	} else if (zinc < 2){
+		x = 2 - zinc;
+		x = x * x;
+	} else if(zinc < 3){
+		x = zinc - 2;
+		x = neg(x * x);
+	} else {
+		x = 4 - zinc;
+		x = neg(x * x);
+	}
+	return x;
+}
+sine2sine(ramp, w1){ 								// sine shapes to octave doubler
+// ramp 	from ramp osc
+// w1 		sets waveshape
+// returns wave in range -1~+1
+	output = triangle(ramp, w1);
+	dx1 = delta(output);
+	output = cycle(wrap(output +.25, 0, 1), index="phase");
+	if (w1>0 && w1<1){
+		if (dx1>0 && w1<.5){
+ 			output *= (w1 *2);
+		} else if (dx1<0 && w1>.5){
+ 			output *= (2 - w1 *2);
+		}
+	} return output;
+}
+pulse(ramp, width){										// simple pulse
+	return (ramp > width)? 1 : -1;
+}
+pulse2(ramp, width){ 									// simple pulse
+// width in range 0~127
+	return (ramp * .007874 > width)? 1 : -1;
+}
+eptrpulse(ramp, inc, width){	//antialiasing slope for pulse osc
+	Buffer eptr("eptr"); 		// loads eptr buffer from Max
+	//d2 = twopi *.213332 / d1;	// transcendental coefficient;
+								// reading from precalculated 16384 buffer, so
+	d2 = 8192  / inc;			// buffer transition coefficient;
+	i2 = inc * .5;
+	//eptr equation: e0 = tanh(4 * sin(d2*(ramp -w1 +d1) -pi5)); 
+	if (ramp <= i2) return peek(eptr, d2 * (ramp + inc - width), 0);
+	else if (ramp <= width - i2) return 1; 
+	else if (ramp <= width + inc) 
+		return neg(peek(eptr, d2 * (ramp + inc -(1 - width)), 0));
+    else if (ramp < 1 -i2) return -1;
+	else return peek(eptr, d2 * (ramp + inc - width), 0);
+}
+eptrpulse3x(ramp, inc, width){						// 3x Oversampled AA Pulse
+	History z0, zt, zr; 
+	t0, t1, t2, trans =0;
+	t0 = delta(ramp);
+	// input is linear ramp, so upsampling only needs linear interp!
+	if (t0>0){ 
+				t2 = ramp -t0 *.6666667;            //z-2
+				t1 = ramp -t0 *.3333333;            //z-1
+ 	} else {   
+				t2 = wrap(zt *.3333333 +zr, 0, 1);  //z-2 
+				t1 = wrap(zt *.6666667 +zr, 0, 1);  //z-1
+	}
+	zt = t0; // ramp and delta history for interp
+	zr = ramp; 
+	trans = inc * .5;
+	t2 = eptrpulse(t2,   trans, width); 
+	t1 = eptrpulse(t1,   trans, width); 
+	t0 = eptrpulse(ramp, trans, width);
+	// downsampling AA square needs unique consideration
+	if      (t2==t1 && t1==t0){
+       										return t0;
+	}else if (t2!=-1 && t1==-1 && t0!=-1){ 
+											return -1;
+	}else if (t2!=1  && t1==1  && t0!=1){ 
+											return  1;
+	}
+	t0 = (t2 + t1 + t0) * .33333333;
+	return t0;
+}
+sawup (fc, r1, inc, srx3, sr3d3, rsr) {			// rising saw with EPTR AA
+// fc		freq, HZ
+// ramp		ramp osc (0~1)
+// inc		increment in each ramp step (needed to calculate EPTR vals)
+// srx3		constant, samplerate * 3
+// sr3d3	constant, samplerate ^3 /3
+// rsr		constant, 1 / samplerate
+	if (r1 < inc){
+		return pow(r1/ fc, 3) * sr3d3 
+			+r1 * fc * rsr 
+			+ 1;
+	} else if(r1 < inc *2){
+		D = r1 *samplerate /fc;	
+		return D * D * D * .66666666666666666667 
+			- D * D *3 
+			+ r1 *srx3/fc 
+			+ r1 *2;		
+	} else if(r1 < inc *3) {
+		D = r1 *samplerate /fc;	
+		return D * D * D *-.33333333333333333333 
+			+ D * D *3 
+			+ D *inc *2 
+			- D *9 +8;	
+	} 
+	return r1 * 2 -1;
+}
+sawdown(fc, ramp, inc, srx3, sr3d3, rsr) {		// falling saw with EPTR AA
+// inputs same as for sawup
+// much same as sawup, with return values optimized 
+	if (ramp < inc){
+		return neg(
+			pow(ramp / fc, 3) * sr3d3 
+			+ ramp * fc * rsr 
+			+ 1);
+	} else if(ramp < inc *2){
+		D = ramp * samplerate /fc;	
+		return neg(
+			D * D * D * .66666666666666666667 
+			- D * D *3 
+			+ ramp * srx3/fc 
+			+ ramp *2);		
+	} else if(ramp < inc *3) {
+		D = ramp *samplerate /fc;	
+		return neg(
+			D * D * D *-.33333333333333333333
+			+ D * D *3 
+			+ D * inc *2 
+			- D *9 +8);	
+	}
+	return (1 - ramp) *2 -1;
+}
+tri(ramp, width){							// simple variable saw/tri
+	return 
+		triangle(ramp, width) *2 -1;
+}
+tri2(ramp, width){							// same, with w in range 0~127
+	return triangle(
+		ramp, width *0.0078740157480315) * 2 -1;
+}
+triwave(ramp, width){ 						// variable tri/saw with simple AA
+	History zramp;
+	dx1 = ramp - zramp;	//dx1 = delta(r1);
+	zramp = ramp;
+	if (dx1 < 0) return -1;
+	else if (ramp > width && zramp < width) return 1;
+	return (ramp < width) ? ramp/width *2 -1 : (ramp - width)/(1 - width) *-2 +1;
+}
+sawtri(r1, w1, inc, fc, rsr, srx3, sr3d3){			// variable saw/tri with AA
+// see sawup for input descriptions
+	if (w1 ==0) {  			// falling saw with AA
+		return sawdown(fc, r1, inc, srx3, sr3d3, rsr);
+	} else if (w1 == 1)  { 	// rising saw with AA
+		return sawup (fc, r1, inc, srx3, sr3d3, rsr);
+	} // using ELSE at end of function causes compile errors
+	return triwave(r1, w1); // variable-slope tri with AA
+}
+karplus(impulse, fc, dampen){						// Karplus oscillator
+// osc = karplus(impulse, fc, dampen);
+//		impulse: 	noise impulse around 10msec
+//		fc: 		frequency as samplerate/mtof(midi_pitch);
+//		dampen: 	dampening as 0-.999999)
+//		osc: 		karplus oscillator signal 
+	Delay karplus(960000, 1, feedback=1);
+	History hfilt;
+	x = karplus.read(fc, 0);
+	karplus.write(impulse + hfilt, 0);
+	y = hfilt;
+	hfilt = mix(x *.9999999999, y, dampen);
+	return x;
+}
+karplusd(impulse, fc, d){						// diffused Karplus
+	Delay karplus(960000, 1, feedback=1);
+	History hfilt;
+	x = karplus.read(fc, 0);
+	x = diffdelay(x, fc, d);		// diffusions
+	// x = diffdelay(x, fc *2, d);
+	karplus.write(impulse + hfilt, 0);
+	y = hfilt;
+	hfilt = mix(x *.9999999999, y, .01);
+	return x;
+}
+karplusm(impulse, fc, d){						// mod Karplus
+	Delay karplus(960000, 1, feedback=1);
+	History hfilt;
+	x = karplus.read(fc, 0);
+	x = diffdelay(x, fc *(d+1), d);		// diffusions
+	x = diffdelay(x, fc *1/(2 -d), d);	// diffusions
+	karplus.write(impulse + hfilt, 0);
+	y = hfilt;
+	hfilt = mix(x *.9999999999, y, .01);
+	return x;
+}
+waveset(sel, width, ramp){									// waveset oscillator
+	// sel: 	waveset (1~47 in provided waveset)
+	// width:  	waveform in waveset (0 ~127)
+	// ramp: 	wavecycle in waveform (0 ~1)  
+ 	Buffer wavesets("wavesets");
+	i = floor(width) * 256;	 // 256 samples/wave, 128 waves/waveset
+	return  mix(				 // return midpoint between two waveforms
+		sample(wavesets, ramp, i,      i +255, sel, index="wave", interp="spline"),
+ 		sample(wavesets, ramp, i +256, i +511, sel, index="wave", interp="spline"), 
+		fract(width)
+	); 
+}
+noiselpf(fc,q,rsrxpi){								// LPF noise osc
+// fc		Freq in HZ
+// q		typ range 1~21
+// rsrxpi	constant, pi / samplerate
+	q = q * .1 +1;
+	signal = noise();
+	a0, a1, a2, b1, b2 = biquadlo(
+		min(fc, 8372),
+		q,
+		rsrxpi);
+	y   = biquad(signal, a0, a1, a2, b1, b2);
+	y  *= .75;
+	return y;
+}
+noisebpf(fc,q,rsrxpi){								// BPF noise osc
+// inputs as for noiselpf()
+	q = q * .2 +1;
+	signal = noise();
+	a0, a1, a2, b1, b2 = biquadband(
+		min(fc, 8372),
+		q,
+		rsrxpi);
+	y   = biquad(signal, a0, a1, a2, b1, b2);
+	y  *= 8;
+	return y;
+}
+noisehpf(fc,q,rsrxpi){								// HPF noise osc
+// inputs as for noiselpf()
+	q = q * .2 +1;
+	signal = noise();
+	a0, a1, a2, b1, b2 = biquadhi(
+			min(fc, 8372),
+			q,
+			rsrxpi);
+	y   = biquad(signal, a0, a1, a2, b1, b2);
+	y  *= .5;
+	return y;
+}
+noisenotch(fc,q,rsrxpi){							// notched noise osc
+// inputs as for noiselpf()
+	q = q * .2 +1;
+	n 	= noise();
+	a0, a1, a2, b1, b2 = biquadnotch(
+			min(fc, 8372),
+			q,
+			rsrxpi);
+	y  = biquad(n, a0, a1, a2, b1, b2);
+	return y;
+}
+pinknoise(){
+	x = noise();
+	return static(x, -.267943, .633972, .633972) * .0473//lopass 16kHz
+		+ static(x, .577352, .211324, .211324)* .125 //lopass 4khz
+		+ static(x, .876977, .061511, .061511)* .25	 //lopass 1kHz
+		+ static(x, .967799, .0161, .0161) 	  * .5	 //lopass 250Hz
+		+ static(x, .991852, .004074, .004074)* 2;	 //lopass 62.5Hz
+}
+noiseosc(type, p, fc, q, rsrxpi2){							// noise osc
+// fc		Freq in HZ
+// q		typ range 0~1
+// rsrxpi2	constant, pi / samplerate *2
+	Buffer noisegain("noisegain");
+	History ha0, ha1, ha2, hb1, hb2, z1, z2, zg;
+	a0, a1, a2, b0, b1, b2 = 0;
+	if(change(type)!=0 || change(fc)!=0 || change(q)!=0){
+		omega = min(fc, 16744) * rsrxpi2;
+		omega1 = sin(omega);
+		omega2 = cos(omega);
+		alpha = (1 - q *.0095) * omega1;
+		b0    = 1 / (alpha + 1);
+		b1   = b0 * omega2 * -2;
+		b2   = b0 * (1 - alpha);
+		if (type <56){					//low pass
+			a1  = b0 * (1 - omega2);
+			a0  = a1 * .5;
+			a2  = a0;
+		} else if (type <58){			//band pass
+			a1  = 0;
+			a0  = b0 * omega1 * .5;
+			a2  = neg(a0);
+		} else if (type<60){			// hi pass
+			a1  = b0 * neg(omega2 +1);
+			a0  = a1 * -.5;
+			a2  = a0;
+		} else{		// notch
+			a1  = b0 * b1;
+			a0  = 1;
+			a2  = 1;
+		}
+		ha0 = a0; ha1 = a1; ha2 = a2; hb1 = b1; hb2 = b2;
+	}
+	zg  = selector(type - 53,
+		300/(p -12) * (1.1 -(q *.01)) * (1 + (q *.03)),	// lp white:
+		300/(p -12) * (1.1 -(q *.01)) * (1 + (q *.03)),	// lp pink
+		300/(p -12) * (1.1 -(q *.01)) * (1 + (q *.03)),	// bp white
+		400/(p -12) * (1.1 -(q *.01)) * (1 + (q *.03)),	// bp pink
+		2,												// hp white
+		3,												// hp pink
+		10 * q * .0025 +.1,								// notch white
+		15 * q * .0025 +.1								// notch pink
+	);
+	if (type %2 == 0)
+		return biquad(noise(), ha0, ha1, ha2, hb1, hb2) * zg;
+	return biquad(pinknoise(), ha0, ha1, ha2, hb1, hb2) * zg;
+}
+osc(sel, p, fc, wide, ph, snc, trg, osc, mod1, mod2, env, rsrms, srx3, sr3d3, rsrxpi2, rsr){
+// sel		wave select
+// fc		pitch in midi units
+// wid		morph, 9~1
+// ph		phase, 0~1
+// trg 		sync trigger
+// osc		this osc (prev cycle from history)
+// osc2`	the osc used for sync
+// rsrxpi, rsrms, rsr, sr3d3, srx3: constants
+	History oinc, wid;
+	output = 0;
+	v, x, y = 0;
+	if(sel >53){														// noise
+		output = noiseosc(sel, p, fc, wide, rsrxpi2);
+	} else if(sel == 48){												// harp
+			v = samplerate / fc;
+			y  = noise() * env;
+			output = karplus(y, v, wide * .008);
+	} else if(sel == 49){												// env
+			v = samplerate / fc;
+			y  = noise() * (ramptrig(10, trg || (change(sel == 48) >0), rsrms));
+			output = karplus(y, v, wide * .008);
+	} else if(sel == 50){												// bowed
+			v = samplerate / fc;
+			y  = cycle(fc) * (1-(ramptrig(100, trg || (change(sel == 48) >0), rsrms)));
+			output = karplus(y, v, wide * .008);
+	} else if(sel == 51){												// diffuse env
+			v = samplerate / fc;
+			y  = noise() * env;
+			output = karplusd(y, v, wide * .01);
+	} else if(sel == 52){												// mod env
+			v = samplerate / fc;
+			y  = noise() * env;
+			output = karplusm(y, v, wide * .01);
+	} else {														// ramped oscs
+		v = min(fc, 16744) * rsr; //= ramp inc; max MIDI 132.
+		x = wrap(oinc + v, 0, 1);
+		if     (snc==2 && trg==1)                           x = ph; // gate snc
+ 		else if(snc==3 && change(mod1 > ph) >0)             x = 0;	// soft snc 1
+		else if(snc==4 && change(mod1 > ph && osc > ph) >0) x = 0;	// softer snc 1
+		else if(snc==5 && change(mod1 > 0  && x   > ph) >0) x = 0;	// ramp snc 1
+		else if(snc==6 && change(mod1 > ph && x   > ph) >0) x = 0;	// ramper snc 1
+ 		else if(snc==7 && change(mod2 > ph) >0)             x = 0;	// soft snc 2
+		else if(snc==8 && change(mod2 > ph && osc > ph) >0) x = 0;	// softer snc 2
+		else if(snc==9 && change(mod2 > 0  && x   > ph) >0) x = 0;	// ramp snc 2
+		else if(snc >9 && change(mod2 > ph && x   > ph) >0) x = 0;	// ramper snc 2
+		oinc = x;
+		wid  = sah(wide, change(x)==-1);
+		if (sel ==1) { 														// PULSE
+			if (v <.125) // if Fc > sr/16 (2756Hz @441000 sr), oversample
+ 				output = eptrpulse3x(x, v, scale(wid, 0, 100, .025, .975));
+			else output = eptrpulse(  x, v, wid *.009 +.0005);
+		} else if (sel ==2) { 												// SAW/TRI
+			if (wid == 0) { 								// falling saw
+				if (x < v){
+					output =neg(pow(x/fc, 3) *srx3 +x *fc *rsr +1);
+				} else if(x < v *2){
+					y = x / v;	
+					output =neg(y *y *y *.66666666666666666667 -y *y *3 +x *sr3d3/fc +x *2);		
+				} else if(x < v *3) {
+					y = x / v;	
+					output =neg(y *y *y *-.33333333333333333333 +y *y *3 +y *v *2 -y *9 +8);	
+				} else {
+					output = 1 -x *2;
+				} 
+			} else if (wid == 100) { 						// rising saw
+				if (x < v){
+					x = pow(x/ fc, 3) *sr3d3 +x *fc *rsr +1;
+				} else if (x < v *2){
+					y = x / v;	
+					output = y *y *y *.66666666666666666667 -y *y *3 +x *srx3/fc +x *2;		
+				} else if(x < v *3) {
+					y = x / v;	
+					output = y *y *y *-.33333333333333333333 +y *y *3 +y *v *2 -y *9 +8;	
+				} else {
+					output =x *2 -1;
+				}
+			} else output = triwave(x, wid *.01); 			// triangle
+		} else if (sel == 53){								// noise/random
+			output = mix(sah (noise(), change(x) <0), noise(), wid *.01);
+		} else { 											//WAVESET
+			output  = waveset(sel, wid *1.27, x);
+		}
+		if(snc >2 || sel== 48){		//dcblock distorts waves, so only use it for synced waveforms
+			output = dcblock(output);
+		}
+	}
+	return output;
+}
+// ******************************************************************************
+// IIRs
+comb(input, delay, feedback, lvl){ 					//feedforward comb with feedback
+// input	signal to comb filter
+// delay	delay time in samples
+// feedback	values 1 or higher cause self oscillation
+// lvl		comb amplitude, 0~1 
+	Delay comb1(30000, 1, feedback = 0);// supports 8Hz at 192Khz samplerate
+	Delay comb2(30000, 1, feedback = 1);
+	comb1.write(input);
+	if (lvl >0){
+		delay     = smoother3(delay);
+		feedback  = smoother1(feedback);
+		output    = comb1.read(delay, 0, interp="spline") + input;
+		output   += comb2.read(delay, 0, interp="spline") * feedback;
+		comb2.write(output);
+		return output;
+	} else {
+		return input;
+	}
+}
+/******************************************************************************/
+// LFOs 
+lfo(sel,frq,wid,snc_en,trg,rsr,fourpi){						// basic LFO
+// sel			0 = off, 1 = sin, 2 = ramp, 3 = noise
+// frq			Hz
+// wid			waveshape
+// syncen		boolean
+// trg			trigger for sync
+// fourpi 		constant, twopi * 2;
+	frq    = frq * rsr;
+	x = accum(max (0, frq), (snc_en)? trg: 0, max=1);
+	x = selector(sel,
+		mix(sin(x * twopi), sin(x * fourpi), wid) *2,
+		triangle(wrap(x +.25, 0, 1), wid) *2 -1,
+		(wrap(x + wid, 0, 1) >(wid*.98 +.01))* 2 -1,
+		sah(noise(), mix(x>wid,noise(),wid))
+	);
+	return x;	
+}
+lfopoly(sel, frq, sprd, sprdlvl, sprdtype, 
+		wid, sncen, trg, fourpi, rsr){// LFO with amp and freq spread
+// sel			0 = off, 1 = sin, 2 = ramp, 3 = noise
+// frq			Hz
+// sprd			the ampunt of spread for this poly instance
+// sprdlvl		the panel control value for spread amount
+// sprdtype		0 = freq spread, 1 =- amp spread
+// wid			waveshape
+// syncen		boolean
+// trg			trigger for sync
+// fourpi 		constant, twopi * 2;
+// rsr			constant, 1/samplerate 
+	sprd   = sprd * sprdlvl + 1;
+	frq    = frq * rsr;
+	amod   = 1;
+	if(sprdType==0){
+		frq = frq * sprd;
+	} else {
+		amod = sprd;
+	}
+	x = accum(max (0, frq), (snc_en)? trg: 0, max=1);
+	x = selector(sel, 
+		mix(sin(x * twopi), sin(x * fourpi), wid) * amod, 
+		triangle(wrap(x +.25, 0, 1), wid) *amod *2 -amod, 
+		(wrap(x + wid, 0, 1) >(wid*.98 +.01))* amod * 2 -amod, 
+		sah(noise1, mix(x>wid,noise1,wid))*amod * 2 - amod);
+	return x;	
+}
+/******************************************************************************/
+/* Envelopes ******************************************************************/
+/******************************************************************************/
+adsr(gate,predelay,att,dec,sus,susn,rel){ 						// BASIC ADSR
+// gate: 		+ve transitions from prior value start gate
+// predelay: 	sample clock / sample cycles for 5 ms delay 
+// att: 		sample clock / sample cycles for attack
+// dec: 		sample clock / sample cycles for dec
+// sus: 		sustain between 0 & 1
+// susn:		1 - sustain
+// rel:			sample clock / sample cycles for release
+// returns env level 0~1
+	Buffer pow25("pow25");
+	History hinc, henv, hlvl;
+	inc = hinc;
+	trg = change(gate);
+		if (trg >0) {		// envelope on
+		if (henv) {			//if trg and env already on, add 5ms decay
+			inc = 1;
+			hlvl = henv;
+		} else inc = 2;	
+	} else if (trg <0) {	// envelope off
+		inc = 5;
+		hlvl = henv;
+	}
+	inc += selector(hinc,	// set inc for each phase duration
+		predelay,			// 1: pre-decay time
+		att,				// 2: attack time
+		dec,   				// 3: decay time
+		0, 					// 4: hold on sustain
+		rel,  				// 5: release time
+		0);					// 6: end of env cycle
+	env = selector(floor(inc),								// calc output levels
+		sample (pow25, 1 - wrap(inc, 0, 1)) * hlvl,			// 1. pre-decay
+		sample (pow25, wrap(inc, 0, 1)),					// 2. attack
+		sample (pow25, 1 - wrap(inc, 0, 1)) * susn + sus,	// 3. decay
+		sus,												// 4. sustain
+		sample (pow25, 1 - wrap(inc, 0,1)) * hlvl,			// 5. release
+		0);													// 6. end of cycle
+	hinc = inc;
+	henv = env;
+	return env;
+}
+adsrloop(trg,gate,predelay,att,dec,sus,susn,rel,mode){ // ADSR with loop mode
+// trg:			single-cycle trigger to start envelope
+// gate: 		HIGH while gate is on
+// predelay: 	sample clock / sample cycles for 5 ms delay 
+// att: 		sample clock / sample cycles for attack
+// dec: 		sample clock / sample cycles for dec
+// sus: 		sustain between 0 & 1
+// susn:		1 - sustain
+// rel:			sample clock / sample cycles for release
+// mode:		if 2, loop is turned on, otherwise no loop
+// returns env level 0~1
+	Buffer pow25("pow25");
+	History hinc, henv, hlvl;
+	inc = hinc;
+	if (trg >0) {
+		if (henv) {	
+			inc = 1;
+			hlvl = henv;
+		} else {
+			inc = 2;	
+		}
+	} else if (trg < 0) {
+		inc = 5;
+		hlvl = henv;
+	}
+	inc += selector(hinc,	// set inc for each phase duration
+		predelay,			// 1: pre-decay if env on
+		att,				// 2: attack time
+		dec,   				// 3: decay time
+		0, 					// 4: hold on sustain
+		rel,  				// 5: release time
+		0);					// 6: end of env cycle
+	env = selector(floor(inc),								// calc output levels
+		sample (pow25, 1 - wrap(inc, 0, 1)) * hlvl,			// 1: pre-decay
+		sample (pow25, wrap(inc, 0, 1)),					// 2: attack
+		sample (pow25, 1 - wrap(inc, 0, 1)) * susn + sus,	// 3: decay
+		sus,												// 4: sustain
+		sample (pow25, 1 - wrap(inc, 0,1)) * hlvl,			// 5: release
+		0);													// 5: end of cycle
+	if (mode==2 && gate>0){	// loop mode
+		if (inc >=4){ 	// at end of decay, loop to attack
+			inc = 2 + att;
+			henv = sus;
+			hlvl = sus;
+		}else if (inc <3){ //during attack, lvl increases from  sustain
+			env = sus + susn * sample(pow25, wrap(hinc, 0, 1));
+		}
+		hinc = inc;
+	} else {
+		hinc = inc;
+		henv = env;
+	}
+	return env;
+}
+padsrloop(trg,gate,pre1, pre2,att,dec,sus,rel,mode){//PADSR, loop & predelay
+// trg:			single-cycle trigger to start envelope
+// gate: 		HIGH while gate is on
+// pre1: 		sample clock / sample cycles for 5 ms predecay 
+// pre2: 		sample clock / sample cycles for predelay 
+// att: 		sample clock / sample cycles for attack
+// dec: 		sample clock / sample cycles for dec
+// sus: 		sustain between 0 & 1
+// rel:			sample clock / sample cycles for release
+// mode:		if 2, loop is turned on, otherwise no loop
+// returns env level 0~1
+	Buffer pow25("pow25");
+	History hinc, henv, hlvl;
+	inc = hinc;
+	if (trg >0){
+		if (henv) {//if trg & env on, use pre1
+			inc = 1;
+			hlvl = henv;
+// subtract pre1 from pre2
+		} else {
+			inc = 2;
+		}
+	} else if (trg < 0) {
+		inc = 6;
+		hlvl = henv;
+	}
+	inc += selector(hinc,
+		pre1,		// 1: pre-decay
+		pre2,		// 2: predelay
+		att,		// 3: attack time
+		dec,   		// 4: decay time
+		0, 			// 5: hold on sustain
+		rel,  		// 6: release time
+		0);			// 7: end of env cycle
+	env = selector(floor(inc),
+		sample (pow25, 1 - wrap(inc, 0, 1)) * hlvl,			// 1. pre-decay
+		0,													// 2. predelay
+		sample (pow25, wrap(inc, 0, 1)),					// 3. attack
+		sample (pow25, 1 - wrap(inc, 0, 1)) *(1- sus) + sus,// 4. decay
+		sus,												// 5. sustain
+		sample (pow25, 1 - wrap(inc, 0,1)) * hlvl,			// 6. release
+		0);													// 7. end of cycle
+	if (mode==2 && gate>0){	// loop mode
+		if (inc >=5){ 	// at end of decay, loop to predelay
+			inc = 2 + pre2;
+			henv = sus;
+			hlvl = sus;
+		}else if (inc <3 && inc >=2){ //during att, lvl increases from sustain
+			env = sus + (1 - sus) * sample(pow25, wrap(hinc, 0, 1));
+		}
+		hinc = inc;
+	} else {
+		hinc = inc;
+		henv = env;
+	}
+	return env;
+}
+adbdsrloop(														// ADBDSR with loop
+	trg,gate,predelay,att,dec1,brk,dec2,sus,rel,mode){
+// trg:			single-cycle trigger to start envelope
+// gate: 		HIGH while gate is on
+// predelay: 	sample clock / sample cycles for 5 ms delay 
+// att: 		sample clock / sample cycles for attack1
+// dec1: 		sample clock / sample cycles for dec1
+// brk: 		break level between 0 & 1
+// brkn:		1 - break level
+// dec2: 		sample clock / sample cycles for dec2
+// sus: 		sustain between 0 & 1
+// susn:		1 - sustain
+// rel:			sample clock / sample cycles for release
+// mode:		if 2, loop is turned on, otherwise no loop
+// returns env level 0~1 AND current inc level
+	Buffer pow25("pow25");
+	History hinc(7), henv, hlvl;
+	inc = hinc;
+	if (trg >0) {
+		if (henv) {			//if trg and env already on, add 25ms decay
+			inc = 1;
+			hlvl = henv;
+		} else {				//otherwise  skip it
+			inc = 2;	
+		}
+	} else if (trg <0) {
+		inc = 6;
+		hlvl = henv;
+	} else if (henv == 0) {	// this is main envelope, so it also supplies inc.
+		return 0, 7;		// and explicity sets 0 if env has not yet run. 
+	}
+	inc += selector(hinc,
+		predelay,	// 1: pre-decay time
+		att,		// 2: attack time
+		dec1,   	// 3: decay1 time
+		dec2,   	// 4: decay2 time
+		0, 			// 5: hold on sustain
+		rel,  		// 6: release time
+		0);			// 7: end of env cycle
+	env = selector(floor(inc),
+		sample (pow25, 1 - wrap(inc, 0, 1)) * hlvl,				  // 1: pre-decay
+		sample (pow25, wrap(inc, 0, 1)),						  // 2: att lvl
+		sample (pow25, 1 - wrap(inc, 0, 1)) * (1 -brk) + brk,  	  // 3: dec1 lvl
+		(brk > sus)? 											  // 4: dec2 lvl
+			// decay from break to sus
+			sample (pow25, 1 - wrap(inc, 0, 1)) * (brk - sus) + sus : 
+ 			// attack from break to sus
+			sample (pow25, wrap(inc, 0, 1)) * (sus - brk) + brk,
+		sus,													  // 5: sustain
+		sample (pow25, 1 - wrap(inc, 0,1)) * hlvl,				  // 6: rel lvl
+		0														  // 7: cycle end
+	);
+	if (mode==2 && gate>0){	// loop mode
+		if (inc >=5){ 	// at end of decay2, loop to attack
+			inc = 2 + att;
+			henv = sus;
+			hlvl = sus;
+			hinc = inc;
+			return env, inc;
+		} else if (inc <3){ //during attack, lvl increases from from sustain lvl
+			env = sus + (1 -sus) * sample(pow25, wrap(hinc, 0, 1));
+			henv = env;
+			return env, inc;
+		}
+	} 
+	hinc = inc;
+	henv = env;
+	return env, inc;
+}
+padbdsrloop(										// PADBDSR. predelay & loop
+	trg,gate,pre1,pre2,att,dec1,brk,dec2,sus,rel,mode){
+// trg:			single-cycle trigger to start envelope
+// gate: 		HIGH while gate is on
+// pre1: 		sample clock / sample cycles for 5 ms predecay 
+// pre2: 		sample clock / sample cycles for predelay 
+// att: 		sample clock / sample cycles for attack1
+// dec1: 		sample clock / sample cycles for dec1
+// brk: 		break level between 0 & 1
+// dec2: 		sample clock / sample cycles for dec2
+// sus: 		sustain between 0 & 1
+// rel:			sample clock / sample cycles for release
+// mode:		if 2, loop is turned on, otherwise no loop
+// returns env level 0~1 AND current inc level
+	Buffer pow25("pow25");
+	History hinc(7), henv, hlvl;
+	inc = hinc;
+	if (trg >0) {
+		if (henv) {			//if trg and env already on, add 25ms decay
+			inc = 1;
+			hlvl = henv;
+		} else {				//otherwise  skip it
+			inc = 2;	
+		}
+	} else if (trg <0) {
+		inc = 7;
+		hlvl = henv;
+	}
+	inc += selector(hinc, // env times
+		pre1,		// 1: pre-attack time
+		pre2,		// 2: predelay
+		att,		// 3: attack time
+		dec1,   	// 4: decay1 time
+		dec2,   	// 5: decay2 time
+		0, 			// 6: hold on sustain
+		rel,  		// 7: release time
+		0);			// 8: end of env cycle
+	env = selector(floor(inc),									// env levels:
+		sample (pow25, 1 - wrap(inc, 0, 1)) * hlvl,				  // 1: pre decay
+		0, 														  // 2. predelay
+		sample (pow25, wrap(inc, 0, 1)),						  // 3: att lvl
+		sample (pow25, 1 - wrap(inc, 0, 1)) * (1 -brk) + brk,  	  // 4: dec1 lvl
+		(brk > sus)? 											  // 5: dec2 lvl
+			// decay from break to sus
+			sample (pow25, 1 - wrap(inc, 0, 1)) * (brk - sus) + sus : 
+ 			// attack from break to sus
+			sample (pow25, wrap(inc, 0, 1)) * (sus - brk) + brk,
+		sus,													  // 6: sustain
+		sample (pow25, 1 - wrap(inc, 0,1)) * hlvl,				  // 7: rel lvl
+		0														  // 8: cycle end
+	);
+	if (mode==2 && gate>0){	// loop mode
+		if (inc >=6){ 	// at end of decay, loop to predelay
+			inc = 2 + att;
+			henv = sus;
+			hlvl = sus;
+			hinc = inc;
+			return env, inc;
+		} else if (inc <3){ //during attack, lvl increases from from sustain lvl
+			env = sus + (1 -sus) * sample(pow25, wrap(hinc, 0, 1));
+			henv = env;
+			return env;
+		}
+	} 
+	hinc = inc;
+	henv = env;
+	return env;
+}
+// *******************************************************************************
+// EFFECTS
+glide(pitch, inc, scale, key, type, pat){ // glide
+// pitch	current pitch, MIDI units
+// inc		samples in one quarter beat
+// rate		multiplier of inc for glide/glissando duration 
+// key		c = 0, c# =1, etc
+// type		0=glide fixed, 1=glide auto, 2=gliss fixed, >2=gliss auto
+// scale	index to channel in scales buffer
+// pat		index to channel in pattern buffer
+// rsr96	constant, 24 / (samplerate * 60 * 96)
+// returns pitch after glide/glissando 
+	Buffer scales("scales"), patterns("patterns");
+	Data gliss(128);
+	History zp1, zp2, zinc(128), zstep, zdir, w;
+	zp1   = latch(zp2, change(pitch)); // prior pitch
+	p0    = pitch;
+ 	y, z   = 0;
+	if (change(type)){
+		zinc = 128;		// stops weird things at init
+	}
+	if (type !=0){
+		if(change(zp1)){							// scales
+			zinc  = 0; 								// increment
+			zstep = 0;
+			w     = p0 - zp1;						// change in pitch
+			zdir  = sign(w);						// direction
+			gliss.poke(zp1, 0);						// array of gliss values
+			for (x = 1; x <= abs(w); x += 1){
+				y = x * zdir + zp1 + key;
+				z = scales.peek(y, scale);			// scale
+				if (z != scales.peek(y + zdir, scale)){
+					y = patterns.peek(zstep, pat);
+					if( y < abs(w)){	
+						gliss.poke(z - key, y);	
+						zstep += 1;		  				// intervals
+					}
+				}
+			}
+		} else if (zp1 != p0){
+			y   = inc;
+			if (type==1){							// fixed-rate glide
+				if (zinc <  abs(w)){
+					zinc += y * abs(w);
+					p0    = zp1 + zinc * zdir;
+				}
+			} else if (type==2){					// auto-rate rate
+				if (zinc < 1){
+					zinc += y;
+					p0    = zp1 + zinc * w;
+				}
+			} else if (type==3){					// fixed-rate glissando
+				if (zinc < zstep){
+					zinc += y;
+					p0    = gliss.peek(zinc);
+				}
+			}else if (type==4){						// auto-rate glissando, 
+				if (zinc < zstep){
+					p0    = gliss.peek(ceil(zinc));
+					zinc += y * zstep;
+				}
+			}
+		}
+		zp2  = p0;	  // last p from glide/gliss, if note changes while rinning 
+	}
+	return p0;
+}
+ping1(input1, input2, delayL, delayR, mix, cross, 				// simpler stereo delay
+		inpan, feedback){
+// input1/2		signals L and R
+// delayL/R		delays in samples
+// mix			mix of signals with delay (0 bypasses effect)
+// cross		0, the L and R delay lines are separate
+//				1, the delay fully ping pongs
+// inpan		0, only left input is passed into delay. 1, only right
+// feedback		the amount of feedback
+// time			base delay, samples
+	Delay ping(384000, 2, feedback=1);// allows 2 secs at 192khz
+	u, v, w, x, y, z = 0;
+	delayL = smoother3( delayL);	// delays
+	delayR = smoother3( delayR);
+	if(mix > 0){ // this part can be bypassed when not used. 
+		x = ping.read(delayL, 0, interp="spline");
+		y = ping.read(delayR, 1, interp="spline");
+		w = 1 - cross;
+		u = input1 * (1 - inpan);
+		v = input2 * inpan;
+		ping.write((x * z + y * cross) * feedback + u * w + v * cross, 0);
+		ping.write((y * z + x * cross) * feedback + v * w + u * cross, 1);
+		u = smoother1(mix);
+		v = 1 - u; u *= 2;
+		return input1 * v + x * u, input2 * v + y * u;
+	} else {
+		ping.write(input1, 0); ping.write(input2, 1);
+		return input1, input2;
+	}
+}
+ping2(input1, input2, delayL, delayR, mix, cross, inpan, // stereo delay with hi/lo cut
+		feedback, locut, hicut, time){
+// cutlo/hi		lo and cutoff in midi units 
+	Delay ping(384000, 2, feedback=1);// allows 2 secs at 192khz
+	History zlocut, zhicut, za1, zb0, zb1, z2a1, z2b0, z2b1;
+	u, v, x, y, z = 0;
+	delayL = smoother3( delayL);	// delays
+	delayR = smoother3( delayR);
+	if(mix > 0){ // this part can be bypassed when not used. 
+		if (locut != zlocut){				// lo filter coefficients
+			za1, zb0, zb1 = staticlo(mtof(locut), 12);
+			zlocut = locut;
+		}
+		if (hicut != zhicut){				// hi filter coefficients
+			z2a1, z2b0, z2b1 = statichi(mtof(hicut), 12);
+			zhicut = hicut;
+		}
+		x = ping.read(delayL, 0, interp="spline");
+		y = ping.read(delayR, 1, interp="spline");
+		x = static(x, za1, zb0, zb1);
+		x = static(x, z2a1, z2b0, z2b1);
+		y = static(y, za1, zb0, zb1);
+		y = static(y, z2a1, z2b0, z2b1);
+		w = 1 - cross;
+		u = input1 * (1 - inpan);
+		v = input2 * inpan;
+		ping.write((x * z + y * cross) * feedback + u * w + v * cross, 0);
+		ping.write((y * z + x * cross) * feedback + v * w + u * cross, 1);
+		u = smoother1(mix);
+		v = 1 - u; u *=2;
+		return input1 * v + x * u, input2 * v + y * u;
+	} else {
+		ping.write(input1, 0);	ping.write(input2, 1);
+		return input1, input2;
+	}
+}
+flange(input,f_deep, f_rate, f_fb, f_cntr, f_sat, f_mix){	//stereo flange
+	Delay delayF(24000, 2, feedback=1); 
+	fx1 = delayF.read(cycle(f_rate)* f_deep + f_cntr, 		 0, interp="linear");
+	fx2 = delayF.read(cycle(f_rate * 1.31) * f_deep + f_cntr,1, interp="linear");
+	if(f_sat!=0){ 
+		fx1 = parabol(fx1 + fx2,f_sat);
+	}else{
+		fx1 = fx1 + fx2;
+	}
+	delayF.write(input + fx1 * f_fb);
+	return mix(input,fx1,f_mix), neg(mix(fx1,input,f_mix));
+}
+chorus(left, right, cdel, deep, sprd, cmix,						// simple stereo chorus
+		s1, s2, s3, s4, s5, s6, s7, s8 ){
+// left/right	signals L and R
+// cdel			base delay, samples
+// deep			depth of modulation, factor of cdel
+// sprd			spread of delay, factor of cdel
+// mix			output mix
+// s1-s8		sine oscillators in range -1-1
+	Delay ch(10000, 2, feedback=1); 
+	ch.write(left);
+	ch.write(right);
+	x, y = 0;
+	if(cmix != 0){													// chorus
+		cdel = smoother3(cdel);
+		o1 =  ch.read(cdel + deep * s1, 				0, interp="linear") 
+	   		+ ch.read(cdel + deep * s2 + sprd * .25, 	0, interp="linear")
+	   		+ ch.read(cdel + deep * s3 + sprd * .5,		0, interp="linear") 
+	   		+ ch.read(cdel + deep * s4 + sprd * .75, 	0, interp="linear");
+		o2 =  ch.read(cdel + deep * s5 + sprd * .125,	1, interp="linear") 
+	   		+ ch.read(cdel + deep * s6 + sprd * .375,	1, interp="linear")
+	   		+ ch.read(cdel + deep * s7 + sprd * .625,	1, interp="linear") 
+	   		+ ch.read(cdel + deep * s8 + sprd * .875, 	1, interp="linear");
+		x = smoother1(cmix);
+		y = 1 - x; x *= .5;
+		return  left * y + o1 * x, right * y + o2 * x;
+	} else {
+		return left, right;
+	}
+}
+diffdelay(input, delay, diff){				//  diffusion delay
+// input	signal to diffuse
+// delay	diffuser delay in samples
+// diff		diffusion amount
+	Delay d(1000);
+	x = d.read(delay);
+	input = input - x * diff;
+	d.write(input);
+	input = x + input * diff;
+	return input;
+}
+tankLeft(input, damp, decay){  		// left late reflections
+// input	signal to diffuse
+// damp		typ. .5
+// decay	typ. .7
+	Delay d1(924, feedback=1),
+	d2(4217,4, feedback=1),
+	d3(2656,3, feedback=1),
+	d4(5163,3, feedback=1);
+	History z1;
+	y = d1.read(908 + cycle(.07) *16);
+	x = input * decay + y *.7;
+	d1.write(x);
+	x = y - x *.7;
+ 	d2.write(x);			// diffuser 2
+	x = d2.read(4217, 0);
+	x = mix(x, z1, damp);	// damp
+	z1 = x;
+	y = d3.read(2656, 0);	// taps out
+	x = x * decay - y *.5;
+	d3.write(x);
+	d4.write(y + x *.5);	// diffuser 3
+	x = d4.read(3163, 0) * decay;
+	y = d2.read(266,1) + d2.read(2974,2) + d4.read(1996,2)
+		- d3.read(1913,2);
+	z = d2.read(2111,3) + d3.read(335,1) + d4.read(121,1);
+	return x, y, z;
+}
+tankRight(input, damp, decay){  	// right late reflections
+// input	signal to diffuse
+// damp		typ. .5
+// decay	typ. .7
+	Delay d1(688, feedback=1),
+	d2(4453,4, feedback=1),
+	d3(1800,3, feedback=1),
+	d4(3720,3, feedback=1);
+	History z1;
+	y = d1.read(672 + cycle(.10) *16);
+	x = input * decay + y *.7;
+	d1.write(x);
+	x = y - x *.7;
+ 	d2.write(x);			// diffuser 2
+	x = d2.read(4453, 0);
+	x = mix(x, z1, damp);	// damp
+	z1 = x;
+	y = d3.read(1800, 0);	// taps out
+	x = x * decay - y *.5;
+	d3.write(x);
+	d4.write(y + x *.5);	// diffuser 3
+	x = d4.read(3720, 0) * decay;
+	y = d2.read(353,1) + d2.read(3627,2) + d4.read(2673,2)
+ 		- d3.read(1228,2);
+	z = d2.read(1990,3) + d3.read(187,1) + d4.read(1066,1);
+	return x, y, z;
+}
+reverb(left, right, pre, cut, damp, decay, lvl){
+// left, right		input signals
+// pre				predelay, samples
+// cut				input low-pass cut, midi pitch
+// damp				late damping, typ. .5
+// decay			reverb tail, typ. .7
+// ilvl				output amplitude of input signal
+// rlvl				output amplitude of reverb
+	Delay d(19200,feedback=0); 
+	History zy, zcut, za1, zb0, zb1;
+	d.write((left + right) * .6);	// predelay
+	if(lvl > 0){
+		pre = smoother2(pre);
+		y = d.read(pre);
+		if (cut != zcut){				// static filter
+			za1, zb0, zb1 = staticlo(mtof(cut), 12);
+			zcut = cut;
+		}
+		y = static(y, za1, zb0, zb1);
+		y = diffdelay(y, 142, .75);		// diffusions
+		y = diffdelay(y, 107, .75);
+		y = diffdelay(y, 379, .625);
+		y = diffdelay(y, 277, .625);
+		x,  o2, o3 = tankLeft (y + zy, damp, decay);
+		zy, o1, o4 = tankRight(x + y,  damp, decay);
+		u = smoother1(lvl);
+		v = 1 - u; u *=2;
+		x = left  * v + (o1 - o2) * u;
+		y = right * v + (o3 - o4) * u;
+		return x, y;
+	} else {
+		return left, right;
+	}
+}
+limit(left, right, lvl, window, attlo, atthi, rello, relhi){
+	History zl1(1), zr1(1), zl2(1), zr2(1), zl3(1), zr3(1), zl4(1), zr4(1);
+	t = change(train(window));
+	left  = dcblock(left);
+	right = dcblock(right);
+	if(change(t) !=0){
+		zl3 = zl2;
+		zr3 = zr2;
+		zl2 = (zl1 > lvl)? lvl / zl1 : 1;
+		zr2 = (zr1 > lvl)? lvl / zr1 : 1;
+		zl1 = 1;
+		zr1 = 1;
+	} else {
+		zl1 = max(abs (left ), zl1);
+		zr1 = max(abs (right), zr1);
+	}
+	if (zl2 > zl3) zl4 = zl2 * attlo + zl4 * atthi;
+	else zl4 = zl2 * rello + zl4 * relhi;
+	left *=zl4;
+	if (zr2 > zr3) zr4 = zr2 * attlo + zr4 * atthi;
+	else zr4 = zr2 * rello + zr4 * relhi;
+	right *= zr4;
+	return left, right;
+}
+// ************************************************************************************
+// Declarations
+// ************************************************************************************
+// sometimes compile errors are more detailed if the buffers used in funcionts
+// are declared in main(). So you might wish to uncomment this.
+//Buffer filterdraw(), 	//the Max buffer name into which filterPlot2() draws biquads, sizeinsamps = 110 
+//	svfgain(),	// the Max buffer from which the SVF gets gain-table data
+//	eptr(), 	// precalculated anti-aliasing data for pulse waves
+//	wavesets(),	// the oscillator waveforms and morphs for the waveset oscillator
+//	noisegain(),	// the buffer from which noisosc adjusts filtered noise levels
+//	pow25(),	// precalculated values of pow(2.5) for envelope curve shaping
+//	scales(),	// the scale values for tuned glissando 
+//	patterns();	// the pattern values for pattern glissando. 
+// ************************************************************************************
+// Constants
+rsrms  = 1000/samplerate;			// 1ms in samples
+rsrx5  = 200/samplerate; 			// 5ms in samples
+srflt  = twopi/(samplerate * 3);  	// SVF filter delay(x3 because oversampled)
+srx3   = samplerate * 3;          	// for EPTR calculations
+sr3d3  = pow(samplerate, 3) /3;
+rsrxpi = pi/samplerate;        		// for biquads
+rsrxpi2= twopi/samplerate;        	// for filtered noise oscs
+rsr96  = 1/samplerate/60/96*24;   	// 96clk period in samples
+rsr    = 1/samplerate;            	// for all basic Hz->period calcs
+dclk   = max(1745,samplerate*.02); 	// display clock period

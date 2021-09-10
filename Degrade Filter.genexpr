@@ -1,0 +1,46 @@
+require ("fsDSPLibrary.genexpr");
+
+//sounds better declared local like other cnls ???
+tanhCNL(x) {
+	
+	x = tanhRational(x);
+	x = dcblock(x * (1 - 0.3333333 * x * x));
+	
+	return x;
+
+}
+
+Param envFlag(0., min=0., max=1);
+
+//for fx mixer
+Param width(1, min=0.0, max=2.0);
+Param haas(0.0, min=0.0, max=20.0);
+Param bal(0.5, min=0.0, max=1.0);
+Param gain(1);
+Param drywet(0.5, min=0.0, max=1.0);
+
+//for filter
+Param fc(1000, min=0, max=7000);
+
+dryL = in1;
+dryR = in2;
+wetL = in3;
+wetR = in4;
+
+inFlag = dryL || dryR;
+
+//main dsp call
+yL = 0;
+yR = 0;
+
+if (inFlag == 1 || envFlag == 1){
+        yL, yR = degradeFilter(dryL, dryR, wetL, wetR, fc=fc,
+                    width=width, haas=haas, bal=bal, gain=gain, drywet=drywet);
+    }
+    else{
+        yL = 0;
+        yR = 0;
+}
+
+out1 = yL;
+out2 = yR;

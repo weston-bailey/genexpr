@@ -1,0 +1,41 @@
+onepole(signal, freq, xfade){
+	History y0(0);
+	
+	//calc coefficient
+	a = clamp((abs(freq)*sin(2*PI/samplerate)), 0, 1);
+	//fiter
+	lp = mix(y0, signal, a);
+	y0 = lp;
+	hp = signal - lp;
+	
+	//xfade stuff
+	xfade = clamp(xfade, 0., .25);
+	offset = xfade + .75;
+	xfade1 = cycle(xfade, index="phase");
+	xfade2 = cycle(offset, index="phase");
+	lpCross = lp * xfade1;
+ 	hpCross = hp * xfade2;
+	crossover = lpCross + hpCross;
+	
+	
+	return crossover;
+}
+
+allpassFilterFB(signal, delayTime, gain, freq, xfade){
+    
+	Delay ff(1000);
+    Delay fb(1000);
+    ffTap = ff.read(delayTime);
+    fbTap = fb.read(delayTime);
+
+    ap = fixdenorm((ffTap+(clamp(gain, 0., .99)*(signal-fbTap))));
+	apLp = onepole(ap, freq, xfade);
+	
+    fb.write(apLp);
+    ff.write(signal);
+
+    return (apLp);
+
+}
+
+out1 = allpassFilterFB(in1, in2, in3, in4, in5);

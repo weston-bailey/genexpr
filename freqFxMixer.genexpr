@@ -1,0 +1,15 @@
+require ("fsDSPLibrary.genexpr")
+
+Param width(0.0, min=0.0, max=2.0);
+Param haas(0.0, min=0.0, max=20.0);
+Param bal(0.0, min=0.0, max=1.0);
+Param gain(0.0);
+Param drywet(0.0, min=0.0, max=1.0);
+
+sWidth = mixSmooth(width, .95);
+sHaas = mixSmooth(haas, .999);
+sBal = mixSmooth(bal, .95);
+sGain = mixSmooth(gain, .95);
+sDrywet = mixSmooth(drywet, .95);
+
+out1, out2 = fxMixer(in1, in2, in3, in4, sWidth, sHaas, sBal, sGain, sDrywet);

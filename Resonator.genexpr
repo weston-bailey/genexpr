@@ -1,0 +1,50 @@
+require ("fsDSPLibrary.genexpr");
+
+History outFlag(0.0);
+
+Param envFlag(0., min=0., max=1);
+
+//for fx mixer
+Param width(1, min=0.0, max=2.0);
+Param haas(0.0, min=0.0, max=20.0);
+Param bal(0.5, min=0.0, max=1.0);
+Param gain(1);
+Param drywet(0.5, min=0.0, max=1.0);
+
+//for fx
+Param p0(440);
+Param p1(440);
+Param p2(440);
+Param p3(440);
+
+Param d0(.7);
+Param d1(.7);
+Param d2(.7);
+Param d3(.7);
+
+Param damp(.5, min=0, max=1.);
+
+dryL = in1;
+dryR = in2;
+
+inFlag = dryL || dryR;
+
+yL = 0;
+yR = 0;
+flag = 0;
+if (inFlag == 1 || outFlag == 1){
+        yL, yR, flag = resonator(dryL, dryR, envFlag=envFlag,
+                            p0=p0, p1=p1, p2=p2, p3=p3, 
+                                d0=d0, d1=d2, d2=d2, d3=d3, damp=damp,
+                                    width=width, haas=haas, bal=bal, gain=gain, drywet=drywet);
+    }
+    else{
+        yL = 0;
+        yR = 0;
+        flag = 0;
+}
+
+outFlag = flag;
+
+out1 = yL;
+out2 = yR;

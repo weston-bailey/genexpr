@@ -1,0 +1,37 @@
+allpass(signal, delayTime, gain){
+    
+	Delay ff(1000);
+    Delay fb(1000);
+    ffTap = ff.read(delayTime);
+    fbTap = fb.read(delayTime);
+
+    ap = fixdenorm((ffTap+(clamp(gain, 0., .99)*(signal-fbTap))));
+
+    fb.write(ap);
+    ff.write(signal);
+
+    return (ap);
+
+}
+	
+allpassDoubNest(signal, delayTime, delayTime2, delayTime3, gain){
+	
+	 Delay ff(1000);
+    Delay fb(1000);
+    ffTap = ff.read(delayTime);
+    fbTap = fb.read(delayTime);
+	nestedAp = allpass(ff, delayTime2, gain);
+	
+	ap = fixdenorm((ffTap+(clamp(gain, 0., .99)*(signal-fbTap))));
+	nestedAp = allpass(ap, delayTime2, gain);
+	nestedAp2 = allpass(nestedAp, delayTime3, gain);
+	
+	fb.write(nestedAp2);
+    ff.write(signal);
+	
+	return ap;
+}
+
+
+out1 = allpass(in1, in2, in5);
+out2 = allpassDoubNest(in1, in2, in3, in4, in5);

@@ -1,0 +1,25 @@
+allpassFDN(signal, delayTime, gain, fbComp, fbAdd){
+    Delay ff(1000);
+    Delay fb(1000);
+    ffTap = ff.read(delayTime);
+    fbTap = fb.read(delayTime);
+
+    ap = fixdenorm((ffTap+(clamp(gain, 0., .99)*(signal-(fbTap*fbComp)))));
+
+    fb.write(ap+fbAdd);
+    ff.write(signal);
+
+    return (ap);
+
+}
+
+History hisFb(0);
+
+a1 = allpassFDN(in1, in2, in3, .25, hisFb);
+a2 = allpassFDN(in1, in2, in3, .25, a1);
+a3 = allpassFDN(in1, in2, in3, .25, a2);
+a4 = allpassFDN(in1, in2, in3, .25, a3);
+
+hisFb = fixdenorm(a4);
+
+out1 = (a1 * .25) + (a2 * .25) + (a3 * .25) + (a4 * .25);

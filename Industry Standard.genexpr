@@ -1,0 +1,46 @@
+require ("fsDSPLibrary.genexpr");
+
+History outFlag(0.0);
+
+Param envFlag(1., min=0., max=1);
+
+//for fx mixer
+Param width(1, min=0.0, max=2.0);
+Param haas(0.0, min=0.0, max=20.0);
+Param bal(0.5, min=0.0, max=1.0);
+Param gain(1);
+Param drywet(0.5, min=0.0, max=1.0);
+
+//for LFO
+Param wFSel(0.0, min=0.0, max=4.0);
+Param duty(1, min=0.0, max=1.0);
+Param offset(0.0, min=0.0, max=1.0);
+Param depth(1, min=-1.0, max=1.0);
+
+//fx specifc
+Param fb(0.0, min=-1.0, max=1.0);
+Param dTime(1., min=0.0, max=samplerate);
+
+dryL = in1;
+dryR = in2;
+p = in3;
+
+inFlag = dryL || dryR;
+
+//is loop
+yL = 0;
+yR = 0;
+if (inFlag == 1 || outFlag == 1){
+        yL, yR = industryStandard(dryL, dryR, p, envFlag=envFlag,
+                                            wFSel=wFSel, duty=duty, offset=offset, depth=depth, fb=fb, dTime=dTime,
+                                                width=width, haas=haas, bal=bal, gain=gain, drywet=drywet);
+    }
+    else{
+        yL = 0;
+        yR = 0;
+    }
+
+outFlag = aCheckStereoMin(yL, yR, inFlag, .95, .000001, dTime);
+
+out1 = yL;
+out2 = yR;

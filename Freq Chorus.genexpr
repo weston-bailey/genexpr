@@ -1,0 +1,55 @@
+require ("fsDSPLibrary.genexpr");
+
+History outFlag(0.0);
+
+Param envFlag(0., min=0., max=1);
+
+//for fx mixer
+Param width(1, min=0.0, max=2.0);
+Param haas(0.0, min=0.0, max=20.0);
+Param bal(0.5, min=0.0, max=1.0);
+Param gain(1);
+Param drywet(0.5, min=0.0, max=1.0);
+
+//for LFO
+Param wFSel(0.0, min=0.0, max=4.0);
+Param duty(1, min=0.0, max=1.0);
+Param depth(1, min=-1., max=1.0);
+
+//fx specifc
+Param fb(0.0, min=-1.1, max=1.1);
+Param dTime(0.0, min=5., max=samplerate);
+Param diffuse(0.0, min=-1.0, max=1.0);
+Param fbFDN(0., min=-1., max =1.);
+Param dTimeFDN(0, min=0);
+Param shimmer(.7, min=0, max=1);
+
+
+
+dryL = in1;
+dryR = in2;
+p = in3;
+
+inFlag = dryL || dryR;
+
+//effect
+yL = 0;
+yR = 0;
+flag = 0;
+lfo = 0;
+if (inFlag == 1 || outFlag == 1){
+        yL, yR, flag = freqChorus(dryL, dryR, p, envFlag=envFlag,
+                                        wFSel=wFSel, duty=duty, depth=depth, fb=fb, dTime=dTime, diffuse=diffuse, fbFDN=fbFDN, dTimeFDN=dTimeFDN, shimmer=shimmer,
+                                                width=width, haas=haas, bal=bal, gain=gain, drywet=drywet);
+    }
+    else{
+        yL = 0;
+        yR = 0;
+        flag = 0;
+}
+
+outFlag = flag;
+
+out1 = yL;
+out2 = yR;
+

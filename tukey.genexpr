@@ -1,0 +1,56 @@
+//tukey window calculated
+tukeyWin0(x, r){ 
+    return (x < 0.5 / r) 
+                * 0.5 
+                    * (1 - cos(PI * 2 * r * x)) 
+                        + ((1 - x) < 0.5 / r) 
+                            * 0.5 
+                                * (1 - cos(PI * 2 * r * (1 - x))) 
+                                    + ((1 - x) > 0.5 / r && x > 0.5 / r);
+}
+
+//tukey window with branching
+tukeyWin1(x, r){ 
+    if(x < (0.5 / r)){
+        return  0.5 * (1 - cos(PI * 2 * r * x)) ;
+        }
+        else if(1 - x < 0.5 / r){
+            return 0.5 * (1 - cos(PI * 2 * r * (1 - x))); 
+        }
+        else{
+            return 1;
+    }
+}
+
+History winFlag(1);
+Data winData(8192);
+
+Param freq(1);
+Param r(15);
+Param sel(0);
+
+// make precalc LUT
+if (winFlag){
+    for (i = 0; i < 8192; i += 1){
+        //winPhase = i / 8192;
+        poke(winData, tukeyWin0(i / 8192, r), i,	0, 0, index="samples");
+    }
+    winFlag = 0;
+}
+
+//drive windows
+phase = phasor(freq);
+
+//select window
+win = 0;
+if (sel == 0){
+    win = tukeyWin0(phase, r);
+    }
+    else if (sel == 1){
+        win  = tukeyWin1(phase, r);
+    }
+    else {
+        win = sample(winData, phase, 0, index="phase", interp="cubic");
+    }
+
+out1, out2, out3 = win, phase;

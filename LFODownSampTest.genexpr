@@ -1,0 +1,52 @@
+require ("fsDSPLibrary.genexpr");
+
+History ds(0.0);
+History lfoL(0.0);
+History lfoR(0.0);
+
+Param wFSel(0.0, min=0.0, max=4.0);
+Param duty(1, min=0.0, max=1.0);
+Param offset(0.0, min=0.0, max=1.0);
+Param depth(1, min=0.0, max=1.0);
+Param downSamp(16, min=0);
+
+//smoothing for LFO controls
+sDuty = mixSmooth(duty, .95);
+sOffset = mixSmooth(offset, .95);
+sDepth = mixSmooth(depth, .95);
+
+//phase accum for lfos
+p = in1;
+pOffset = (p + sOffset) % 1.;
+
+//downSamp = floor(samplerate * 0.00033333333);
+dsCount = wrap((ds + 1), 0, downSamp);
+ds = dsCount;
+
+//LFO1
+//lfoL = 0;
+if (dsCount == 0){
+        lfoL = fsLFO2(pOffset, wFSel, duty);
+        lfoL = (lfoL * .5) + .5;
+        lfoL = (lfoL * sDepth); 
+    }
+    else {
+        lfoL = lfoL;
+    }
+
+//lfo2
+if (dsCount == 0){
+        lfoR = fsLFO(p, wFSel, duty);
+        lfoR = (lfoR * .5) + .5;
+        lfoR = (lfoR * sDepth);
+    }
+    else {
+        lfoR = lfoR;
+    }
+
+
+out1 = lfoL;
+out2 = lfoR;
+
+out3 = dsCount;
+out4 = downSamp;

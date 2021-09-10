@@ -1,0 +1,56 @@
+hannWin(x){ 
+
+    x = .5 * (1-  cos(pi * 2 * x));
+    return x;
+
+}
+
+History	phaseAccum(0);
+History fbLz(0);
+History fbRz(0);
+History	gPhaseAccum(0);
+Data circleDelay(samplerate * 5, 2);
+Data fbBuff(samplerate * 5, 2);	
+
+Param gSize(64);
+Param fb(.5);
+
+buffSize = dim(circleDelay);
+
+dryL, dryR = in1, in2;
+
+writePhase	= wrap((phaseAccum + 1), 0, buffSize);
+phaseAccum = writePhase;
+readPhase = wrap((writePhase - gSize), 0, buffSize); //forward
+
+gW	= wrap((gPhaseAccum + 1), 0, gSize);
+gPhaseAccum = gW;
+gR = wrap((gW - (gSize - 1) * .5), 0, gSize); //forward
+
+poke(circleDelay, dryL, writePhase,	0, 0, index="samples");
+poke(circleDelay, dryR, writePhase,	1, 0, index="samples");
+
+dryL = dryL + fbLz;
+dryR = dryR + fbRz;
+
+wetL = sample(circleDelay, readPhase, 0, index="samples", interp="step");
+wetR = sample(circleDelay, readPhase, 1, index="samples", interp="step");
+
+poke(fbBuff, wetL, gW,	0, 0, index="samples");
+poke(fbBuff, wetR, gW,	1, 0, index="samples");
+
+fbL = sample(fbBuff, gR, 0, index="samples", interp="step");
+fbR = sample(fbBuff, gR, 1, index="samples", interp="step");
+
+fbL = fbL * fb;
+fbR = fbR * fb;
+
+fbL = fbLz;
+fbR = fbRz;
+
+
+
+
+out1, out2 = wetL, wetR;
+
+out3 = gR;
