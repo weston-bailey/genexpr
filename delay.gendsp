@@ -1,0 +1,407 @@
+    freqDelay(dryL, dryR){
+    
+        History	phaseAccum(0);
+        History	clear(1);	
+        History leftFb(0);
+        History rightFb(0);
+
+        Data circleDelay(samplerate * 5, 2);			
+
+        //for fx mixer
+        Param width(1, min=0.0, max=2.0);
+        Param haas(0.0, min=0.0, max=20.0);
+        Param bal(0.5, min=0.0, max=1.0);
+        Param gain(1);
+        Param drywet(0.5, min=0.0, max=1.0);
+
+        //fx params
+        Param dTime(11025, min=0);		
+        Param fb(0);
+        /* 
+        mode 0 = stereo
+        mode 1 = pingpong LR
+        mode 2 = pingpong RL
+        mode 3 = reverse
+        mode 4 = reverse pp LR
+        mode 5 = rev pp RL
+        mode 6 = glitch
+        mode 7 = glitch pingpong LR
+        mode 8 = glitch pingpong RL
+        */
+        Param mode(0);
+        Param pS(0, min=0, max=2); //mode
+        Param pSA(0.); // amount
+        Param filter(0, min=0, max=1); //switch
+        Param fc(1500., min=0., max=7000.); 
+        Param xfade(0., min=0., max=.25);
+        Param gMult(.2);
+
+        //smoothing for fx mixer
+        sWidth = mixSmooth(width, .999);
+        sHaas = mixSmooth(haas, .999);
+        sBal = mixSmooth(bal, .999);
+        sGain = mixSmooth(gain, .999);
+        sDrywet = mixSmooth(drywet, .999);
+
+        //fx params
+        sFb = mixSmooth(fb, .99);
+        sPSA = mixSmooth(pSA, .99);
+        sFc = mixSmooth(fc, .999);
+        sXfade = mixSmooth(xfade, .999);
+        sDTime = mixSmooth(dTime, .99995);
+        SGMult = mixSmooth(gMult, .9999);
+        sDTime = floor(sDTime);
+
+        buffSize = dim(circleDelay);
+
+        //phase accum
+        writePhase	= wrap((phaseAccum + 1), 0, buffSize);
+        phaseAccum = writePhase;
+
+        readPhase = 0;
+        writePhaseB = 0;
+        if (mode == 0 || mode == 1 || mode == 2){
+                readPhase = wrap((writePhase - sDTime), 0, buffSize); //forward
+            }
+            else if (mode == 3 || mode == 4 || mode == 5){
+                writePhaseB = buffSize - writePhase;
+                readPhase = wrap((writePhaseB - sDTime), 0, buffSize); //rev
+            }
+            else if (mode == 6 || mode == 7 || mode == 8){
+                writePhaseB = buffSize - writePhase;
+                readPhase = fold((writePhaseB * SGMult) + sDTime, 0, buffSize); //glitch
+                readPhase = floor(readPhase);
+        }   
+            
+        dL = 0;
+        dR = 0;
+
+        if (mode == 0 || mode == 3 || mode == 6){ 
+                
+                dL = dryL + leftFb; //stereo
+                dR = dryR + rightFb;  
+            }
+            else if (mode == 1 || mode == 4 || mode == 7){
+                
+                dL = (dryL * .5) + (dryR * .5) + rightFb; //pingpong LR
+                dR = leftFb;
+            }
+            else if (mode == 2 || mode == 5 || mode == 8){
+                
+                dL = rightFb;                              //pingpong RL
+                dR = (dryL * .5) + (dryR * .5) + leftFb;
+        }
+        //may not need
+        //if(change(mode) != 0) clear = 1;
+        if (clear) {
+            for(i = 0; i < buffSize; i += 1) {
+                poke(circleDelay, 0, i, 0, 0, index="samples");
+                poke(circleDelay, 0, i, 1, 0, index="samples");
+            }
+            clear = 0;	
+        }
+
+        poke(circleDelay, dL, writePhase,	0, 0, index="samples");
+        poke(circleDelay, dR, writePhase,	1, 0, index="samples");
+
+        outL = sample(circleDelay, readPhase, 0, index="samples", interp="step");
+        outR = sample(circleDelay, readPhase, 1, index="samples", interp="step");
+
+        fbOutL = outL;
+        fbOutR = outR;
+
+        if (filter == 0){
+                fbOutL = fbOutL;
+                fbOutR = fbOutR;
+            }
+            else if (filter == 1){
+                fbOutL = onepoleXfade(fbOutL, sXfade, sFc);
+                fbOutR = onepoleXfade(fbOutR, sXfade, sFc);
+        }
+
+        if (pS == 0){
+                fbOutL = fbOutL;
+                fbOutR = fbOutR;
+            }
+            else if (pS == 1){
+                fbOutL = pitchShift((fbOutL *  .5), sPSA) + outL * .5;
+                fbOutR = pitchShift((fbOutR * .5), sPSA) + outR  * .5; 
+            }
+            else if (pS == 2){
+                fbOutL = pitchShift(fbOutL, sPSA);
+                fbOutR = pitchShift(fbOutR, sPSA); 
+        }
+
+        if (fb >= .99 || fb <= -.99){
+                fbOutL = tanhL(fbOutL);
+                fbOutR = tanhL(fbOutR); 
+            }
+            else {
+                fbOutL = fbOutL;
+                fbOutR = fbOutR;
+        }
+
+        leftFb = fbOutL * sFb;
+        rightFb = fbOutR * sFb;
+
+        //outFlag = aCheckStereoMin(outL, outR, .95, .000001, dTime);
+
+        yL, yR = fxMixer(dryL, dryR, outL, outR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+        yL = dcblock(yL);
+        yR = dcblock(yR);
+
+        return yL, yR;
+
+    }
+
+    //param smoothing
+    mixSmooth(x, s){
+        //smooth out parameter
+        History fb(0);
+        smooth = mix(x, fb, s);
+
+        fb = smooth;
+
+        return smooth;
+
+    }
+    stereoBypass(L, R){
+        return L, R;
+    }
+    msWidth(L, R, width){
+        
+        scaleL =  L * .5; 
+        scaleR = R * .5;
+        
+        mid = scaleL + scaleR;
+        side = scaleL - scaleR;
+        
+        w = side * width;
+        invW = w * -1.;
+        
+        widthL = mid + w;
+        widthR = mid + invW;
+        
+        return widthL, widthR;
+
+    }
+    msWidthHaas(L, R, width, haas){
+        
+        Delay hDelay(samplerate * .02);
+        haasTap = hDelay.read(haas);
+
+        scaleL =  haasTap * .5; 
+        scaleR = R * .5;
+        
+        mid = scaleL + scaleR;
+        side = scaleL - scaleR;
+        
+        w = side * width;
+        invW = w * -1.;
+        
+        widthL = mid + w;
+        widthR = mid + invW;
+
+        hDelay.write(L);
+
+        return widthL, widthR;
+
+    }
+    stereoBalance(xL, xR, bal){
+        //like Ableton Live uility? bal = 0. >>>> 1.
+        bal = bal * 2; //this is b/c all fs balance ranges are already 0. >>>> 1. ***TODO: FIX***
+        cL = 2 - clamp(bal, 1., 2.);
+        cR = clamp(bal, 0., 1.);
+
+        balanceL = xL * cL;
+        balanceR = xR * cR;
+
+        return balanceL, balanceR; 
+
+    }
+    dryWet(dryL, dryR, wetL, wetR, cross){
+
+        invControl = 1. - cross;
+
+        dryL = dryL * invControl;
+        dryR = dryR * invControl;
+
+        wetL = wetL * cross;
+        wetR = wetR * cross;
+
+        outL = dryL + wetL;
+        outR = dryR + wetR;
+
+        return outL, outR;
+
+    }
+    stereoGain(L, R, A){
+
+        gainL = L * A;
+        gainR = R * A;
+
+        return gainL, gainR;
+
+    }
+    //All fsfx mixer specific
+    mswh(L, R, width, haas){
+        
+        mswhL = 0;
+        mswhR = 0;
+        
+        if (width >= 0. && haas > 0.){
+            mswhL, mswhR = msWidthHaas(L, R, width, haas);
+        }
+        else if (width >= 0. && haas == 0.){
+            mswhL, mswhR = msWidth(L, R, width);
+        }
+
+        return mswhL, mswhR;
+
+    }
+    bal(L, R, bal){
+
+        balanceL = 0;
+        balanceR = 0;
+
+        if (bal > .5 || bal < .5){
+            balanceL, balanceR = stereoBalance(L, R, bal, 1.);
+        }
+        else if (bal == .5){
+            balanceL, balanceR = stereoBypass(L, R);    
+        }
+
+        return balanceL, balanceR;
+    }
+    dw(dryL, dryR, wetL, wetR, cross){
+
+        dwL = 0;
+        dwR = 0;
+        
+        if (cross > 0 && cross < 1.){ 
+            dwL, dwR = dryWet(dryL, dryR, wetL, wetR, cross);
+            }
+            else if (cross == 0.){
+            dwL, dwR = stereoBypass(dryL, dryR); 
+            }
+            else if (cross == 1.){
+            dwL, dwR = stereoBypass(wetL, wetR); 
+            }
+
+        return dwL, dwR;
+
+    }
+    amp(L, R, A){
+        
+        ampL = 0;
+        ampR = 0;
+
+        if (A > 1. || A < 1.){
+            ampL, ampR = stereoGain(L, R, A);
+        }
+        else if (A == 1.){
+            ampL, ampR = stereoBypass(L, R);    
+        }
+
+        return ampL, ampR;
+
+    }
+    fxMixer(dryL, dryR, wetL, wetR, width, haas, bal, gain, drywet){
+    
+        fxMidSideL, fxMidSideR = mswh(wetL, wetR, width, haas);
+        fxBalL, fxBalR = bal(fxMidSideL, fxMidSideR, bal);
+        fxGainL, fxGainR = amp(fxBalL, fxBalR, gain);
+        fxDryWetL, fxDryWetR = dw(dryL, dryR, fxGainL, fxGainR, drywet);
+
+        return fxDryWetL, fxDryWetR;
+
+    }
+    tanhL(x){
+
+        x2 = x * x;
+        
+        a  = (((x2 + 378.) * x2 + 17325.) * x2 + 135135.) * x;
+        b  = ((28. * x2 + 3150.) * x2 + 62370.) * x2 + 135135.;
+        tanhL = a / b;
+        
+        return clamp(tanhL, -1., 1.);
+
+    }
+    //output flag only aft len has passed with "Flag" monitoring input too
+    aCheckStereoMin(xL, xR, flag, t, a, len){
+        //a = .000001 -120db, t = .95  
+        aCheck =  abs(xL + xR, flag);
+        aCheck = mixSmooth(aCheck, t);
+        aCheck = aCheck > a;
+        min, inc = minElapsed(aCheck, len); 
+        flag = (aCheck == 1) ? aCheck : min;
+        return flag;
+
+    }
+
+    //count to len once 
+    minElapsed(trig, len){
+
+        History stopCount;
+        trig = delta(trig) > 0;
+        len = latch(len, trig);
+        
+        rLen = len - 1;
+        inc = counter(stopCount, trig, len);
+        reset = inc < rLen;
+
+        stopCount = reset;
+
+        return reset;
+
+    } 
+    onepoleXfade(signal, xfade, fc){
+    
+        History y0(0);
+        
+        //calc coefficient
+        a = clamp((abs(fc)*sin(2*PI/samplerate)), 0, 1);
+        //fiter
+        lp = mix(y0, signal, a);
+        y0 = lp;
+        hp = signal - lp;
+        
+        //xfade stuff
+        xfade = clamp(xfade, 0., .25);
+        offset = xfade + .75;
+        xfade1 = cycle(xfade, index="phase");
+        xfade2 = cycle(offset, index="phase");
+        lpCross = lp * xfade1;
+        hpCross = hp * xfade2;
+        crossover = lpCross + hpCross;
+        
+        
+        return crossover;
+    }
+    //delay based pitch shifter
+    pitchShift(x, pitch){
+        Delay pitchShift(samplerate);
+
+        //phase accum for delay
+        p = phasor(pitch, 0);
+        pOff = ((p + .5) % 1.);
+
+        pSP1 = mstosamps(p * 100.);
+        pSP2 = mstosamps(pOff *100);
+
+        //delay
+        pSTap1 = pitchShift.read(pSP1);
+        pSTap2 = pitchShift.read(pSP2);
+
+        //envelope
+        pSEnv1 =   (pSTap1 * (.5 + (-.5 * cycle(p, index="phase"))));
+        pSEnv2 =   (pSTap2 * (.5 + (-.5 * cycle(pOff, index="phase"))));
+
+        pS = pSEnv1 + pSEnv2;
+
+        pitchShift.write(x);
+
+        return pS;
+
+    }

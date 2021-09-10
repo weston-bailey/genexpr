@@ -1,0 +1,693 @@
+/*  //  //  //  //  //  //  //  //  //  //  //
+MAIN DSP LOOP
+*/  //  //  //  //  //  //  //  //  //  //  //
+stereoPhaser(dryL, dryR, phase){
+    //History fbL(0);
+    //History fbR(0);
+
+    Delay fbL(samplerate*.25);
+    Delay fbR(samplerate*.25);
+
+//for fx mixer
+Param width(1, min=0.0, max=2.0);
+Param haas(0.0, min=0.0, max=20.0);
+Param bal(0.5, min=0.0, max=1.0);
+Param gain(1);
+Param drywet(0.5, min=0.0, max=1.0);
+
+//lfo controls
+Param depth(.5, min=0., max=1.);
+Param offset(.5, min=0, max=1.);         //right channel offset
+Param duty(1., min=0.1, max=1.0);
+Param wFSel(0.0);
+
+//env follow controls
+Param att(300.);
+Param rel(100.);
+Param thresh(.3);
+Param sense(1.);
+Param inv(0.);
+
+//fx specific
+Param ff(.92, min=-1, max=1);
+Param Q (.3, min=.3, max=10);
+Param fb(0., min=-.99, max=.99);
+    Param del(1, min=1.0, max=(samplerate*.25));
+
+    //smoothing for fx mixer
+    sWidth = mixSmooth(width, .95);
+    sHaas = mixSmooth(haas, .999);
+    sBal = mixSmooth(bal, .95);
+    sGain = mixSmooth(gain, .95);
+    sDrywet = mixSmooth(drywet, .95);
+
+    //smoothing for LFO controls
+    sDuty = mixSmooth(duty, .9999);
+    sDepth = mixSmooth(depth, .9999);
+    sOffset = mixSmooth(offset, .9999);
+
+    //smothing for fx
+    sQ = mixSmooth(Q, .9999);
+    sFf = mixSmooth(ff, .9999);
+    sFb = mixSmooth(fb, .9999);
+    sDel = mixSmooth(del, .99);
+
+    //for rms
+    stereoSum = dryL + dryR;
+    
+    //lfo method -- right lfo is offset
+    lfoL, lfoR, env = psLFO(phase, sOffset, wFSel, sDuty, sDepth, //osc stuff 
+                        stereoSum, att, rel, thresh, sense, inv); //env stuff
+
+    a0, a1, a2, b1, b2 = biquadCoeffAP(lfoL, Q);
+    Ra0, Ra1, Ra2, Rb1, Rb2 = biquadCoeffAP(lfoR, Q);
+
+    //for fb delay
+    fbLTap = fbL.read(sDel);
+    fbRTap = fbR.read(sDel);
+    
+    psL = dryL + fbLTap;
+    psR = dryR + fbRTap; 
+
+    //phaseshifter effect (psLDel & psRDel are old variable names, now everything is 
+        //summed and put into the feedback loop)
+    psL = phaseShifter4Stage(psL, a0, a1, a2, b1, b2);
+    psR = phaseShifter4Stage(psR, Ra0, Ra1, Ra2, Rb1, Rb2);
+    psLDel = phaseShifter4Stage(psL, a0, a1, a2, b1, b2);
+    psRDel = phaseShifter4Stage(psR, Ra0, Ra1, Ra2, Rb1, Rb2);
+
+    psL = (psL * .5) + (psLDel * .5);
+    psL = dcblock(psL);
+    psR = (psR * .5) + (psRDel * .5);
+    psR = dcblock(psR);
+
+    //do feedback TODO: test saturation curves for tone
+    fbL.write(tanhRational(psL * sFb));
+    fbR.write(tanhRational(psR * sFb));
+
+    psL = psL + (dryL * sFf);
+    psR = psR + (dryR * sFf);
+
+    psL = softLimit(psL);
+    psR = softLimit(psR);
+
+    yL, yR = fxMixer(dryL, dryR, psL, psR, sWidth, sHaas, sBal, sGain, sDrywet);
+
+    return yL, yR, env;
+
+}
+/*  //  //  //  //  //  //  //  //  //  //  //
+FUNCTIONS
+*/  //  //  //  //  //  //  //  //  //  //  //
+//rms for env follower
+rms(x){
+    Param fc(100);
+
+    a = sin(fc * 2 * PI/samplerate); //lp coef
+
+    x = abs(x);
+    x = pow(x, 2); //square
+    x = mixSmooth(x, a); //mean
+    y = sqrt(x); //root
+
+    return y;
+}
+//t = ms
+msCoeffEnv(t){
+    //calc coef
+    return pow(0.01, 1.0 / (t * samplerate * 0.001));
+}
+//an analogue feeling envelope follower
+envFollow(x, att, rel, thresh, sense, inv){
+
+    History prev(0);
+
+    x = rms(x, fc=100.); //follow power
+    env = 0;
+    ms = 0;
+    if (prev > thresh){
+        env = sense;
+        ms = att;
+        }
+        else{
+            env = 0;
+            ms = rel;
+    }
+    prev = x; //update state
+    
+    a = msCoeffEnv(ms); //calc coeff
+    y = mixSmooth(env, a); //filter switch
+    y = clamp(y, 0.001, .999);
+    if(inv == 1){
+        y = 1 - y;
+        }
+        else{
+            y = y;
+    }
+
+    return y;
+
+}
+
+tanhRational(x){
+    
+    if( x < -3 ){
+        return -1;
+    }
+    else if( x > 3 ){
+        return 1;
+    }
+    else {
+        return x * ( 27 + x * x ) / ( 27 + 9 * x * x );
+    }
+
+}
+//for output dectection
+aCheckStereo(xL, xR, t, a){
+    //a = .000001 -120db, t = .95  
+    aCheck =  abs(xL + xR);
+    aCheck = mixSmooth(aCheck, t);
+    aCheck = aCheck > a;
+
+    return aCheck;
+
+}
+//param smoothing
+mixSmooth(x, s){
+    //smooth out parameter
+    History fb(0);
+    smooth = mix(x, fb, s);
+
+    fb = smooth;
+
+    return smooth;
+
+}
+
+//calc fc given a frequency
+onepoleLPCoeff(fc){
+        a = sin(fc * 2 * PI/samplerate); //lp coef
+        return a;
+}
+    //simple calc sinus
+calcSin(phase){
+    cs = sin((pi*(phase * 2 -1)));
+    
+    return cs;
+}
+    //simple calc tri
+calcTri(phase){
+    ct = fold((phase * 4 -2), -1., 1.);
+    
+    return ct;
+}
+    //soft edged square lfo
+tanhSquareLFO(phase, duty){
+    //phase 0 >> 1 
+    d = 1 / duty;
+    s = 2.5 - (1 - duty);
+    p = clamp((phase * d), 0, 1);
+    //osc routine
+    sinOsc = (cycle(p, index="phase") * s) * d;
+    tanhOsc = tanhRational(sinOsc);
+
+    return tanhOsc;
+
+}
+//like rand~
+randT(phase){
+    
+    History z1(0);
+
+    reset = (delta(phase) < 0);
+    noiseGate = latch(noise(), reset);
+    z1Gate = latch(z1, reset);
+    randGate = mix(z1Gate, noiseGate, phase);
+        
+    z1 = randGate;
+        
+    return randGate;
+    
+}
+    //third order hermite polynomial
+hRandLFO(p){
+    //takes phase input 0 >> 1
+    //for rand cascade
+    History e2(0);
+    History e1(0);
+    History e0(0);
+
+
+    //signed inverted phasor input
+    pS = (1- p) -.5;
+
+    //cascade of rand previuos inputs
+    y3 = sah(noise(), pS, 0);
+    y2 = sah(e2, pS, 0);
+    y1 = sah(e1, pS, 0);
+    y0 = sah(e0, pS, 0);
+
+    e2 = y3;
+    e1 = y2;
+    e0 = y1;
+
+    //calc coeffs
+    c0 = y1;
+    c1 = (y2 - y0) * .5;
+
+    c2 = y0 - (y1 * 2.5);
+    c2 = c2 + (y2 * 2);
+    c2 = c2 - (y3 * .5);
+
+    c3 = ((y1 - y2) * 1.5) + ((y3 - y0) * .5);
+
+    //do polynomial
+    //hPoly = (((((c3 * p) + c2) * p) + c1) * p) + c0;
+
+    hPoly = c3 * p;
+    hPoly = hPoly + c2;
+    hPoly = hPoly * p;
+    hPoly = hPoly + c1;
+    hPoly = hPoly * p;
+    hPoly = hPoly + c0;
+
+    return hPoly;
+
+}
+//swoopy tanhy rand~
+randomRound(phase){
+    History prev(0);
+
+    reset = (delta(phase) < 0);
+    noiseGate = latch(noise(), reset);
+    prevGate = latch(prev, reset);
+    randGate = mix(prevGate, noiseGate, phase);
+    roundT = tanhRational(randGate * 3);
+    
+    fix = fixdenorm(noiseGate);
+    prev = fix;
+    
+    return roundT;
+    
+}
+//like rand~
+randT(phase){
+    
+    History z1(0);
+
+    reset = (delta(phase) < 0);
+    noiseGate = latch(noise(), reset);
+    z1Gate = latch(z1, reset);
+    randGate = mix(z1Gate, noiseGate, phase);
+        
+    z1 = randGate;
+        
+    return randGate;
+    
+}
+//dual lfo for Freq Phase needs to be driven by phase accum
+psLFO(phzr, offset, waveSel, duty, depth, x, att, rel, thresh, sense, inv){
+    
+    //for lfo smoothing
+    History calcCoeff(1);
+    History a(0); //fc 250
+
+    if(calcCoeff){
+        calcCoeff = 0;
+        a = onepoleLPCoeff(250.);
+        a = 1 - a;
+    }
+
+    //spread is hardwired 1/32 of sr
+    spread = samplerate * .03125;
+    //lowest fc
+    base = 40;
+
+    lfoL = 0;
+    lfoR = 0;
+    phaseOff = 0;
+    env = 0;
+    if (waveSel == 0){
+            phaseOff = (phzr + offset) % 1.;
+            lfoL = calcSin(phzr);
+            lfoR = calcSin(phaseOff);
+            env = 0;
+        }
+        else if (waveSel == 1){
+            phaseOff = (phzr + offset) % 1.;
+            lfoL = calcTri(phzr);
+            lfoR = calcTri(phaseOff);
+            env = 0;
+        }
+        else if (waveSel == 2){
+            phaseOff = (phzr + offset) % 1.;
+            lfoL = tanhSquareLFO(phzr, duty);
+            lfoR = tanhSquareLFO(phaseOff, duty);
+            env = 0;
+        }
+        else if (waveSel == 3){
+            phaseOff = (phzr + offset) % 1.;
+            lfoL = randT(phzr);
+            lfoR = randT(phaseOff);
+            env = 0;
+        }
+        else if (waveSel == 4){
+            lfoL = randT(phzr);
+            lfoR = (lfoL + offset) % 1.;
+            env = 0;
+        }
+        else if (waveSel == 5){
+            lfoL = (phzr - .5) * 2;
+            lfoR = (lfoL + offset) % 1;
+            lfoR = mixSmooth(lfoR, a);
+            lfoL = mixSmooth(lfoL, a);
+            env = 0;
+        }
+        else if (waveSel == 6){
+            phaseOff = (phzr + offset) % 1.;
+            lfoL = calcSin(phzr);
+            lfoR = calcSin(phaseOff);
+            lfoR = mixSmooth(lfoR, a);
+            lfoL = mixSmooth(lfoL, a);
+            env = 0;
+        }
+        else if (waveSel == 7){
+            env = envFollow(x, att, rel, thresh, sense, inv);
+            lfoL = (env - .5) * 2;
+            lfoR = (lfoL + offset) % 1;
+            lfoR = mixSmooth(lfoR, a);
+            lfoL = mixSmooth(lfoL, a);
+        }
+        else if (waveSel == 8){
+            env = envFollow(x, att, rel, thresh, sense, inv);
+            lfoL = calcSin(env);
+            lfoR = (lfoL + offset) % 1;
+            lfoR = mixSmooth(lfoR, a);
+            lfoL = mixSmooth(lfoL, a);
+        }
+        else{
+            lfoL = 0;
+            lfoR = 0;
+            env = 0;
+    }
+
+    lfoL = mixSmooth(lfoL, a);
+    lfoL = ((lfoL * .5) + .5) * spread;
+    lfoL = lfoL * depth;
+    lfoL = lfoL + base;
+
+    lfoR = mixSmooth(lfoR, a);
+    lfoR = ((lfoR * .5) + .5) * spread;
+    lfoR = lfoR * depth;
+    lfoR = lfoR + base;
+
+    return lfoL, lfoR, env;
+
+}
+//direct form 2 biquad
+biquadDF2(x, a0, a1, a2, b1, b2) {
+
+    History x1(0), x2(0);
+
+    w = x - (x1 * b1) - (x2 * b2);
+
+    y = (w * a0) + (x1 * a1) + (x2 * a2);
+
+    x2 = x1;
+    x1 = w;
+
+    return y;
+}
+//AP coef calc for df2 biquad
+biquadCoeffAP(cf, Q){
+
+    omega = cf * twopi/samplerate;
+    sn = sin(omega);
+    cs = cos(omega);
+    alpha = sn * 0.5/Q;
+
+    b0 = 1./(1. + alpha);
+    b1 = (-2. * cs) * b0;
+    a1 = b1;
+    a0 = (1. - alpha) * b0;
+    b2 = a0;
+    a2 = 1.0;
+
+    return a0, a1, a2, b1, b2;
+
+}
+//cascaded biquads for phaseshifter >>>>>>>>>>>>>>>>>>>>>this one is being used<<<<<<<<<<<<<<<<<<<<
+phaseShifter4Stage(x, a0, a1, a2, b1, b2){
+
+    x = biquadDF2(x, a0, a1, a2, b1, b2);
+    x = biquadDF2(x, a0, a1, a2, b1, b2);
+    x = biquadDF2(x, a0, a1, a2, b1, b2);
+    x = biquadDF2(x, a0, a1, a2, b1, b2);
+    
+    return x;
+    
+}
+//saturator for the output
+softLimit(x) {
+    return x * (27.0 + x * x) / (27.0 + 9.0 * x * x);
+}
+//Everything below is the output mixer
+stereoBypass(L, R){
+    return L, R;
+}
+
+msWidth(L, R, width){
+    
+    scaleL =  L * .5; 
+    scaleR = R * .5;
+    
+    mid = scaleL + scaleR;
+    side = scaleL - scaleR;
+    
+    w = side * width;
+    invW = w * -1.;
+    
+    widthL = mid + w;
+    widthR = mid + invW;
+    
+    return widthL, widthR;
+
+}
+
+msWidthHaas(L, R, width, haas){
+    
+    Delay hDelay(samplerate * .02);
+    haasTap = hDelay.read(haas);
+
+    scaleL =  haasTap * .5; 
+    scaleR = R * .5;
+    
+    mid = scaleL + scaleR;
+    side = scaleL - scaleR;
+    
+    w = side * width;
+    invW = w * -1.;
+    
+    widthL = mid + w;
+    widthR = mid + invW;
+
+    hDelay.write(L);
+
+    return widthL, widthR;
+
+}
+/* expensive, don't want center attenuated
+stereoBalance(xL, xR, bal, base){
+    //bal 0 - 1.;
+    //base: 0.25 = 1.5 dB 0.5   = 3 dB 0.75 = 4.5 dB 1 = 6dB (linear)
+    cL = pow((1. - bal), base);
+    cR = pow(bal, base);
+
+    balanceL = xL * cL;
+    balanceR = xR * cR;
+
+    return balanceL, balanceR; 
+
+}
+*/
+stereoBalance(xL, xR, bal){
+    //like Ableton Live uility? bal = 0. >>>> 1.
+    bal = bal * 2; //this is b/c all fs balance ranges are already 0. >>>> 1. ***TODO: FIX***
+    cL = 2 - clamp(bal, 1., 2.);
+    cR = clamp(bal, 0., 1.);
+
+    balanceL = xL * cL;
+    balanceR = xR * cR;
+
+    return balanceL, balanceR; 
+
+}
+dryWet(dryL, dryR, wetL, wetR, cross){
+
+    invControl = 1. - cross;
+
+    dryL = dryL * invControl;
+    dryR = dryR * invControl;
+
+    wetL = wetL * cross;
+    wetR = wetR * cross;
+
+    outL = dryL + wetL;
+    outR = dryR + wetR;
+
+    return outL, outR;
+
+}
+/* unused -- too expensive for this I think
+dryWetBalanced(dryL, dryR, wetL, wetR, cross){
+    
+    offset = cross + .75;
+    xfade1 = cycle(cross, index="phase");
+    xfade2 = cycle(offset, index="phase");
+
+    dryL = dryL * xfade1;
+    dryR = dryR * xfade1;
+
+    wetL = wetL * xfade2;
+    wetR = wetR * xfade2;
+
+    outL = dryL + wetL;
+    outR = dryR + wetR;
+
+    return outL, outR;
+
+}
+
+//pan -- wrong kinda pan for this and too expensive -- using "fake pan" stereo balance
+stereoXfadeBalanced(L, R, cross){
+    
+    offset = cross + .75;
+    xfade1 = cycle(cross, index="phase");
+    xfade2 = cycle(offset, index="phase");
+
+    LpanL = L * xfade1;
+    LpanR = L * xfade2;
+
+    RpanL = R * xfade1;
+    RpanR = R * xfade2;
+
+    outL = LpanL + RpanL;
+    outR = RpanR + LpanR;
+
+    return outL, outR;
+
+}
+*/
+stereoGain(L, R, A){
+
+    gainL = L * A;
+    gainR = R * A;
+
+    return gainL, gainR;
+
+}
+/* took haas out bc it isn't working right
+//All fsfx mixer specific
+mswh(L, R, width, haas){
+    
+    mswhL = 0;
+    mswhR = 0;
+    
+    if (width >= 0. && haas > 0.){
+        mswhL, mswhR = msWidthHaas(L, R, width, haas);
+    }
+    else if (width >= 0. && haas == 0.){
+        mswhL, mswhR = msWidth(L, R, width);
+    }
+
+    return mswhL, mswhR;
+
+}
+*/
+
+//All fsfx mixer specific
+mswh(L, R, width, haas){
+    
+mswhL, mswhR = msWidth(L, R, width);
+
+    return mswhL, mswhR;
+
+}
+
+bal(L, R, bal){
+
+    balanceL = 0;
+    balanceR = 0;
+
+    if (bal > .5 || bal < .5){
+        balanceL, balanceR = stereoBalance(L, R, bal, 1.);
+    }
+    else if (bal == .5){
+        balanceL, balanceR = stereoBypass(L, R);    
+    }
+
+    return balanceL, balanceR;
+}
+
+dw(dryL, dryR, wetL, wetR, cross){
+
+    dwL = 0;
+    dwR = 0;
+    
+    if (cross > 0 && cross < 1.){ 
+        dwL, dwR = dryWet(dryL, dryR, wetL, wetR, cross);
+        }
+        else if (cross == 0.){
+        dwL, dwR = stereoBypass(dryL, dryR); 
+        }
+        else if (cross == 1.){
+        dwL, dwR = stereoBypass(wetL, wetR); 
+        }
+
+    return dwL, dwR;
+
+}
+/*
+pan(L, R, cross){
+
+    panL = 0;
+    panR = 0;
+
+    if (cross > .125 || cross < .125){
+        panL, panR = stereoXfadeBalanced(L, R, cross);
+    }
+    else if (cross == .125){
+        panL, panR = stereoBypass(L, R);
+    }  
+
+    return panL, panR;
+
+}
+*/
+
+amp(L, R, A){
+    
+    ampL = 0;
+    ampR = 0;
+
+    if (A > 1. || A < 1.){
+        ampL, ampR = stereoGain(L, R, A);
+    }
+    else if (A == 1.){
+        ampL, ampR = stereoBypass(L, R);    
+    }
+
+    return ampL, ampR;
+
+}
+
+fxMixer(dryL, dryR, wetL, wetR, width, haas, bal, gain, drywet){
+
+    fxMidSideL, fxMidSideR = mswh(wetL, wetR, width, haas);
+    fxBalL, fxBalR = bal(fxMidSideL, fxMidSideR, bal);
+    fxGainL, fxGainR = amp(fxBalL, fxBalR, gain);
+    fxDryWetL, fxDryWetR = dw(dryL, dryR, fxGainL, fxGainR, drywet);
+
+    return fxDryWetL, fxDryWetR;
+
+}
